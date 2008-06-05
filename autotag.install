@@ -1,0 +1,32 @@
+<?php
+
+/**
+ * This file helps with the install of the autotag module.  All it does is sets the highest node ID for 
+ * nodes which cron will search.  Cron eventually becomes unnecessary for this module.
+ */
+/**
+ * Implementation of hook_install
+ */
+function autotag_install(){
+  $hign_nid = array_pop(db_fetch_array(db_query("SELECT id FROM {sequences} WHERE name = 'node_nid'")));
+  variable_set('autotag_last_node',$hign_nid);
+  variable_set('autotag_cron_highest_nid', $hign_nid);  
+  switch ($GLOBALS['db_type']) {
+    case 'mysql':
+    case 'mysqli':    
+      $result = db_query("CREATE TABLE {autotag} (
+                           nid INT(10),
+                           tid INT(10),
+                           CONSTRAINT imagex_primary_key PRIMARY KEY (tid,nid)
+                          );");
+      break;
+    case 'pgsql':
+      $result = false;
+      break;
+  }
+}
+
+function autotag_uninstall(){
+  db_query("DELETE FROM variable WHERE name LIKE 'autotag_%'");
+  db_query("DROP TABLE {autotag}");
+}
