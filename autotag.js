@@ -1,7 +1,11 @@
 // On initial load, add dragable to all li dragable items
 $(document).ready(function () {
   // Prevent duplicate attachment of the collapsible behavior.
-  $ui('.autotag-dragable').draggable({helper: 'clone'});
+  $ui('.autotag-dragable').draggable({
+		helper: 'clone', 
+		zIndex: 150,
+		appendTo: '#autotag-container',
+	});
   $ui('#autotag-dnd-right').droppable({
   	accept: ".autotag-dragable",
   	activeClass: 'autotag-dnd-drop-active',

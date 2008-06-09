@@ -1,5 +1,4 @@
 <?php
-
 /**
  * This file helps with the install of the autotag module.  All it does is sets the highest node ID for 
  * nodes which cron will search.  Cron eventually becomes unnecessary for this module.
@@ -8,22 +7,30 @@
  * Implementation of hook_install
  */
 function autotag_install(){
-  $hign_nid = array_pop(db_fetch_array(db_query("SELECT id FROM {sequences} WHERE name = 'node_nid'")));
-  variable_set('autotag_last_node',$hign_nid);
-  variable_set('autotag_cron_highest_nid', $hign_nid);  
-  switch ($GLOBALS['db_type']) {
+  switch ($GLOBALS['db_type']){
     case 'mysql':
-    case 'mysqli':    
-      $result = db_query("CREATE TABLE {autotag} (
-                           nid INT(10),
-                           tid INT(10),
-                           CONSTRAINT imagex_primary_key PRIMARY KEY (tid,nid)
-                          );");
+    case 'mysqli':
+      db_query("CREATE TABLE {autotag} (
+        nid INT(10),
+        tid INT(10),
+        CONSTRAINT imagex_primary_key PRIMARY KEY (tid,nid)
+      )");
       break;
     case 'pgsql':
-      $result = false;
+      db_query("CREATE TABLE {autotag} (
+        nid int_unsigned NOT NULL,
+        tid int_unsigned NOT NULL,
+        PRIMARY KEY (tid, nid)
+      )");
       break;
   }
+  //Get taxonomy's weight, and increase it by one
+  $taxonomy_weight = array_pop(db_fetch_array(db_query("SELECT weight FROM {system} WHERE name='taxonomy'")));
+  db_query("UPDATE {system} SET weight=%d WHERE name='autotag'", $taxonomy_weight);
+  // Set the high and low NID
+  $hign_nid = array_pop(db_fetch_array(db_query("SELECT id FROM {sequences} WHERE name = '{node}_nid'")));
+  variable_set('autotag_last_node',$hign_nid);
+  variable_set('autotag_cron_highest_nid', $hign_nid);
 }
 
 function autotag_uninstall(){

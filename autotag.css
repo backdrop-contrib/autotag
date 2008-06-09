@@ -10,7 +10,8 @@
  overflow:auto;
  float:left;
 }
-.autotag-dnd li{
+.autotag-dnd li,.autotag-dnd div li{
+ list-style: none;
  z-index:100;
  margin:1px;
  border: dotted 1px #ccc;
@@ -18,9 +19,14 @@
  background: inherit;
  width:90%px;
 }
-.autotag-dnd-drop-hover{
+.autotag-dnd li:hover{
+ cursor:move;
+}
+.autotag-dnd-drop-active, .autotag-dnd-drop-hover{
  z-index:-1;
 }
-.autotag-dnd-drop-active{
- z-index:-1;
+div.autotag-dnd-drop-hover, div.autotag-dnd-drop-active{
+ background-image:url('drop.gif');
+ background-position: 50% 50%;
+ background-repeat: no-repeat;
 }

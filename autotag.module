@@ -13,7 +13,7 @@
 /***********************************************************************************
  * TEXT i8n
  ***********************************************************************************/
-define('AUTOTAG_DESCRIPTION','The terms in the "Terms to tag" box were found in the text. Drag \'n\' drop the terms from the "Terms to tag" box to the "Terms to ignore" box if you don\'t want this page/node to be tagged with that term');
+define('AUTOTAG_DESCRIPTION','The terms in the "Terms to tag" box were found in your text. Drag \'n\' drop the terms from the "Terms to tag" box to the "Terms to ignore" box if you don\'t want this page/node to be tagged with that term');
 define('AUTOTAG_TITLE','Discovered tags');
 define('AUTOTAG_TAGGED','Terms to use');
 define('AUTOTAG_IGNORE','Terms to ignore');
@@ -29,7 +29,8 @@ define('AUTOTAG_LOW_NID_DESC','Sets the lowest node ID to be automatically tagge
 define('AUTOTAG_IGNORE_FIELDS',"Fields to ignore in content type '%type'");
 define('AUTOTAG_IGNORE_FIELDS_DESC','Uncheck a field if you don\'t want it to be searched for taxonomy terms');
 define('AUTOTAG_ADDITIONAL_TERMS','Additional terms to tag this node with');
-define('AUTOTAG_ADDITIONAL_TERMS_DESC','Terms can be selected from:');
+define('AUTOTAG_ADDITIONAL_TERMS_DESC','Terms can be selected from (multiple terms seperated by a comma):');
+define('AUTOTAG_SUBMIT2_TEXT','Once finished reviewing the taxonomy terms, simply press submit.  You may also review what you have entered below, if you feel a tag hasn\'t been found');
 /***********************************************************************************
  * HOOKS
  ***********************************************************************************/
@@ -46,7 +47,11 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
       $node = _autotag_search($node);
       $node = _autotag_submit($node);
       break;
-}}
+    case 'insert':
+      _autotag_update_table($node->nid, explode("|",$node->hideterms));
+      break;
+  }
+}
 
 /**
  * Implementation of hook_cron
@@ -173,7 +178,7 @@ function autotag_form_alter($form_id, &$form){
     }
     // HTML shit for drag'n'droping
     $form['autotag']['dragndropfields'] = array(
-      '#value' => '<div class="autotag-dnd">
+      '#value' => '<div class="autotag-dnd" id="autotag-container">
   <div id="autotag-dnd-left">
     <h3>'.t(AUTOTAG_TAGGED).'</h3>
     <ul>
@@ -221,6 +226,7 @@ function autotag_form_alter($form_id, &$form){
   $form['submit']['#value'] = $button_name;
   if($step==2){
     $form['autotag']['submit2'] = $form['submit'];
+    $form['autotag']['submit2']['#prefix'] = '<div class="description">'.t(AUTOTAG_SUBMIT2_TEXT).'</div>';
   }
 }
 
@@ -461,8 +467,10 @@ function _autotag_search_field($field, $vids){
       $terms = array_merge($terms,_autotag_search_field($value, $vids));
     }
   } else {
+    // Only search if there is text
+    if(trim($field)==''){return;}
     // Field is raw text search it for stuff
-    $words = preg_split("/[\s,]+/",strtolower($field));
+    $words = preg_split("/[^A-Za-z0-9]+/",addslashes(strtolower($field)));
     $results = db_query("SELECT 
         t.tid, t.vid
       FROM 
@@ -481,7 +489,7 @@ function _autotag_search_field($field, $vids){
     for($i=0;$i<$total_words-1;$i++){
       // Now lets search for "pairs" and search on "like".  If any hit, check back on the result against
       // the original field
-      $sql_array[] = "LOWER(s.name) LIKE '".$words[$i]." ".$words[$i+1]."%' OR LOWER(t.name) LIKE '".$words[$i]." ".$words[$i+1]."%'";
+      $sql_array[] = "LOWER(s.name) LIKE '".$words[$i]." ".$words[$i+1]."%' OR LOWER(t.name) LIKE '".$words[$i]."%".$words[$i+1]."%'";
     }
     if(count($sql_array)){
       // FIXME FIXME FIXME
@@ -489,7 +497,6 @@ function _autotag_search_field($field, $vids){
       while($row=db_fetch_array($results)){
         // Get the full term name, and its synonyms, and check back against the field
         $results_2 = db_query("SELECT tid,vid,LOWER(name) AS name FROM term_data WHERE tid = %d UNION SELECT s.tid,vid,LOWER(s.name) AS name FROM term_synonym s,term_data t WHERE s.tid = %d AND t.tid=s.tid",$row['tid'],$row['tid']);
-        //echo sprintf("SELECT vid,name FROM term_data WHERE tid = %d UNION SELECT vid,s.name FROM term_synonym s,term_data t WHERE tid = %d AND t.tid=s.tid",$row['tid'],$row['tid']);
         while($row_2=db_fetch_array($results_2)){
           if(strpos(strtolower($field),$row_2['name'])!== FALSE){
             $terms[] = array('tid'=>$row_2['tid'],'vid'=>$row_2['vid']);
@@ -507,7 +514,7 @@ function _autotag_search_field($field, $vids){
 function _autotag_fields_to_search($node){
   $fields = array();
   $ignore_fields = array(
-    'nid','vid','status','type','created','comment','changed','promote','sticky','revision_timestamp','log','format','uid','name','picture','data','path','last_comment_timestamp','last_comment_name','comment_count','files','iid','taxonomy','readmore','content','links','additionaltags'
+    'op','attach-url','nid','vid','status','type','created','comment','changed','promote','sticky','revision_timestamp','log','format','uid','name','picture','data','path','last_comment_timestamp','last_comment_name','comment_count','files','iid','taxonomy','readmore','content','links','additionaltags'
   );
   $adminset_ignore_fields = variable_get('autotag_selectfields_'.$node->type , array());
   foreach($adminset_ignore_fields as $field=>$value){
@@ -525,7 +532,7 @@ function _autotag_fields_to_search($node){
 function _autotag_fields_to_search_post($post_form, $type){
   $fields = array();
   $ignore_fields = array(
-    'nid','vid','status','type','created','comment','changed','promote','sticky','revision_timestamp','log','format','uid','name','picture','data','path','last_comment_timestamp','last_comment_name','comment_count','files','iid','taxonomy','readmore','content','links','additionaltags'
+    'op','attach-url','nid','vid','status','type','created','comment','changed','promote','sticky','revision_timestamp','log','format','uid','name','picture','data','path','last_comment_timestamp','last_comment_name','comment_count','files','iid','taxonomy','readmore','content','links','additionaltags'
   );
   $adminset_ignore_fields = variable_get('autotag_selectfields_'.$type, array());
   foreach($adminset_ignore_fields as $field=>$value){
@@ -549,11 +556,13 @@ function _autotag_submit($node){
   $hidden_terms = explode("|",$node->hideterms);
   $values = array();
   foreach($hidden_terms as $term){
-    foreach($node->taxonomy as $vid => $taxonomy_vocab){
-      if(isset($taxonomy_vocab[$term])){
-        unset($node->taxonomy[$vid][$term]);
-        unset($node->taxonomy[$vid][array_search($term,$node->taxonomy[$vid])]);
-        $values[] = "({$node->nid} , $term)";
+    if($term!=''){
+      foreach($node->taxonomy as $vid => $taxonomy_vocab){
+        if(isset($taxonomy_vocab[$term])){
+          unset($node->taxonomy[$vid][$term]);
+          unset($node->taxonomy[$vid][array_search($term,$node->taxonomy[$vid])]);
+          $values[] = $term;
+        }
       }
     }
   }
@@ -572,11 +581,23 @@ function _autotag_submit($node){
       }
     }
   }
+  return $node;
+}
+
+/**
+ * Inserts ths stuff into the autotag table
+ */
+function _autotag_update_table($nid, $values){
   // Add the ignore terms to the database so that the next time the node is edited
   // the terms are in the ignore list, and not the add list.
-  db_query("DELETE FROM {autotag} WHERE nid=%d",$node->nid);
-  db_query("INSERT INTO {autotag} (nid, tid) VALUES ".implode(",",$values));
-  return $node;
+  db_query("DELETE FROM {autotag} WHERE nid=%d",$nid);
+  $values_string = array();
+  foreach($values as $value){
+    if($value!=''){
+      $values_string[] = "($nid, $value)";
+    }
+  }
+  db_query("INSERT INTO {autotag} (nid, tid) VALUES ".implode(",",$values_string));
 }
 
 /**
