@@ -237,7 +237,7 @@ function autotag_form_alter($form_id, &$form){
  */
 function autotag_menu($maycache){
   $items = array();
-  if (!$may_cache) {
+  if ($maycache) {
     $items[] = array(
       'path' => 'admin/settings/autotag',
       'title' => t(AUTOTAG_SETTINGS),
@@ -474,8 +474,8 @@ function _autotag_search_field($field, $vids){
     $results = db_query("SELECT 
         t.tid, t.vid
       FROM 
-        term_data t
-      LEFT JOIN term_synonym s ON s.tid = t.tid
+        {term_data} t
+      LEFT JOIN {term_synonym} s ON s.tid = t.tid
       WHERE(
         LOWER(t.name) IN ('".implode("','",$words)."') OR 
         LOWER(s.name) IN ('".implode("','",$words)."'))
@@ -493,10 +493,10 @@ function _autotag_search_field($field, $vids){
     }
     if(count($sql_array)){
       // FIXME FIXME FIXME
-      $results = db_query("SELECT t.tid FROM term_data t LEFT JOIN term_synonym s ON s.tid = t.tid WHERE ".implode(" OR ",$sql_array));
+      $results = db_query("SELECT t.tid FROM {term_data} t LEFT JOIN term_synonym s ON s.tid = t.tid WHERE ".implode(" OR ",$sql_array));
       while($row=db_fetch_array($results)){
         // Get the full term name, and its synonyms, and check back against the field
-        $results_2 = db_query("SELECT tid,vid,LOWER(name) AS name FROM term_data WHERE tid = %d UNION SELECT s.tid,vid,LOWER(s.name) AS name FROM term_synonym s,term_data t WHERE s.tid = %d AND t.tid=s.tid",$row['tid'],$row['tid']);
+        $results_2 = db_query("SELECT tid,vid,LOWER(name) AS name FROM {term_data} WHERE tid = %d UNION SELECT s.tid,vid,LOWER(s.name) AS name FROM {term_synonym} s,term_data t WHERE s.tid = %d AND t.tid=s.tid",$row['tid'],$row['tid']);
         while($row_2=db_fetch_array($results_2)){
           if(strpos(strtolower($field),$row_2['name'])!== FALSE){
             $terms[] = array('tid'=>$row_2['tid'],'vid'=>$row_2['vid']);
