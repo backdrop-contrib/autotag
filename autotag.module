@@ -43,10 +43,6 @@ define('AUTOTAG_SUBMIT2_TEXT','Once finished reviewing the taxonomy terms, simpl
  */
 function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
   switch($op){
-    case 'submit':
-      $node = _autotag_search($node);
-      $node = _autotag_submit($node);
-      break;
     case 'insert':
       _autotag_update_table($node->nid, explode("|",$node->hideterms));
       break;
@@ -173,7 +169,11 @@ function autotag_form_alter($form_id, &$form){
     }
     foreach($form['#post']['taxonomy'] as $key => $terms){
       if($key != 'tags'){
-        $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$terms).") ORDER BY name");
+        $place_holders = array();
+        foreach($terms as $doesntmatter){
+          $place_holders[] = '%d';
+        }
+        $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$place_holders).") ORDER BY name", $terms);
         while($term=db_fetch_object($results)){
           if(!in_array($term,$ignore_terms)){
             $lists .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.$term->name.' ('.$vocabularies[$term->vid]->name.')</li>';
@@ -475,30 +475,63 @@ function _autotag_search_field($field, $vids){
     // Only search if there is text
     if(trim($field)==''){return;}
     // Field is raw text search it for stuff
-    $words = preg_split("/[^A-Za-z0-9]+/",addslashes(strtolower($field)));
-    $results = db_query("SELECT 
-        t.tid, t.vid
-      FROM 
-        {term_data} t
-      LEFT JOIN {term_synonym} s ON s.tid = t.tid
-      WHERE(
-        LOWER(t.name) IN ('".implode("','",$words)."') OR 
-        LOWER(s.name) IN ('".implode("','",$words)."'))
-      AND
-        vid IN (".implode(",",$vids).")");
+    $words = preg_split("/[^A-Za-z0-9]+/",strtolower($field));
+    $results;
+    $words_placeholder = array();
+    $new_words = array();
+    foreach($words as $word){
+      if(trim($word)!=''){
+        $words_placeholder[] = "'%s'";
+        $new_words[] = $word;
+      }
+    }
+    $words = $new_words;
+    // Because I'm sending words as an array, I've also got to do vids in the same way
+    $vids_placeholder = array();
+    foreach($vids as $doesntmatter){
+      $vids_placeholder[] = "%d";
+    }
+    // Check if leftandright module is installed
+    if(function_exists('leftandright_get_tree')){
+      $results = db_query("SELECT tid, vid FROM {leftandright} WHERE lowername IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")UNION SELECT t.tid, t.vid FROM {term_data} t, {term_synonym} s WHERE s.tid = t.tid AND LOWER(s.name) IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")", array_merge($words,$vids,$words,$vids));
+    } else {
+      $results = db_query("SELECT t.tid, t.vid FROM {term_data} t LEFT JOIN {term_synonym} s ON s.tid = t.tid WHERE(LOWER(t.name) IN (".implode(",",$words_placeholder).") OR LOWER(s.name) IN (".implode(",",$words_placeholder).")) AND vid IN (".implode(",",$vids_placeholder).")", array_merge($words, $words, $vids));
+    }
     while($row=db_fetch_array($results)){
       $terms[] = array('tid'=>$row['tid'], 'vid'=>$row['vid']);
     }
     $total_words = count($words);
     $sql_array = array();
+    $sql_array_syn = array();
+    $words_array = array();
+    $words_array_syn = array();
     for($i=0;$i<$total_words-1;$i++){
-      // Now lets search for "pairs" and search on "like".  If any hit, check back on the result against
-      // the original field
-      $sql_array[] = "LOWER(s.name) LIKE '".$words[$i]." ".$words[$i+1]."%' OR LOWER(t.name) LIKE '".$words[$i]."%".$words[$i+1]."%'";
+      if(trim($words[$i])!="" && trim($words[$i+1])!=""){
+        // Now lets search for "pairs" and search on "like".  If any hit, check back on the result against
+        // the original field
+        if(function_exists('leftandright_get_tree')){
+          $sql_array[] = " lowername LIKE '%s%%%s%%' ";
+          $words_array[] = $words[$i];
+          $words_array[] = $words[$i+1];
+          $sql_array_syn[] = " LOWER(name) LIKE '%s%%%s%%' ";
+          $words_array_syn[] = $words[$i];
+          $words_array_syn[] = $words[$i+1];
+        } else {
+          $sql_array[] = " LOWER(s.name) LIKE '%s%%%s%%' OR LOWER(t.name) LIKE '%s%%%s%%' ";
+          $words_array[] = $words[$i];
+          $words_array[] = $words[$i+1];
+          $words_array[] = $words[$i];
+          $words_array[] = $words[$i+1];
+        }
+      }
     }
     if(count($sql_array)){
       // FIXME FIXME FIXME
-      $results = db_query("SELECT t.tid FROM {term_data} t LEFT JOIN {term_synonym} s ON s.tid = t.tid WHERE ".implode(" OR ",$sql_array));
+      if(function_exists('leftandright_get_tree')){
+        $results = db_query("SELECT tid FROM {leftandright} WHERE ".implode(" OR ",$sql_array)." UNION SELECT tid FROM {term_synonym} WHERE ".implode(" OR ",$sql_array_syn), array_merge($words_array, $words_array_syn));
+      } else {
+        $results = db_query("SELECT t.tid FROM {term_data} t LEFT JOIN {term_synonym} s ON s.tid = t.tid WHERE ".implode(" OR ",$sql_array), $words_array);
+      }
       while($row=db_fetch_array($results)){
         // Get the full term name, and its synonyms, and check back against the field
         $results_2 = db_query("SELECT tid,vid,LOWER(name) AS name FROM {term_data} WHERE tid = %d UNION SELECT s.tid,vid,LOWER(s.name) AS name FROM {term_synonym} s,{term_data} t WHERE s.tid = %d AND t.tid=s.tid",$row['tid'],$row['tid']);
@@ -596,13 +629,16 @@ function _autotag_update_table($nid, $values){
   // Add the ignore terms to the database so that the next time the node is edited
   // the terms are in the ignore list, and not the add list.
   db_query("DELETE FROM {autotag} WHERE nid=%d",$nid);
-  $values_string = array();
+  $tids_nids = array();
+  $tids_nid_placeholder = array();
   foreach($values as $value){
     if($value!=''){
-      $values_string[] = "($nid, $value)";
+      $tids_nid_placeholder[] = "(%d,%d)";
+      $tids_nids[] = $nid;
+      $tids_nids[] = $value;
     }
   }
-  db_query("INSERT INTO {autotag} (nid, tid) VALUES ".implode(",",$values_string));
+  db_query("INSERT INTO {autotag} (nid, tid) VALUES ".implode(",",$tids_nid_placeholder), $tids_nids);
 }
 
 /**
