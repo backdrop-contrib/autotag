@@ -43,6 +43,11 @@ define('AUTOTAG_SUBMIT2_TEXT','Once finished reviewing the taxonomy terms, simpl
  */
 function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
   switch($op){
+    case 'submit':
+      _autotag_search($node);
+      _autotag_submit($node);
+      break;
+    case 'update':
     case 'insert':
       _autotag_update_table($node->nid, explode("|",$node->hideterms));
       break;
@@ -61,7 +66,7 @@ function autotag_cron(){
   $highest_nid = variable_get('autotag_cron_highest_nid',PHP_INT_MAX);
   $num_to_update = variable_get('autotag_nodes_to_search',50);
   
-  // If they're all been searched, simly return
+  // If they've all been searched, simply return
   if($last_nid >= $highest_nid){return;}
   
   // Get the nodes and search them
@@ -90,6 +95,10 @@ function autotag_form_alter($form_id, &$form){
   // If no vocabs are relevant to this node, simply return
   $hide_vids = _autotag_get_vids_for_type($form['type']['#value']);
   if(!count($hide_vids)){return;}
+  
+  // If the form is already a multistep form, then we're going to muck things
+  // up - probably best if we don't support multistep forms.
+  if(isset($form['#multistep']) && $form['#multistep'] == true){return;}
   
   // Lets change the form.
   
@@ -164,7 +173,7 @@ function autotag_form_alter($form_id, &$form){
     if(isset($form['#node']->nid)){
       $ignore_terms = _autotag_get_ignore_terms($form['#node']->nid);
       foreach($ignore_terms as $term){
-        $ignore_list .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.$term->name.' ('.$vocabularies[$term->vid]->name.')</li>';
+        $ignore_list .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
       }
     }
     foreach($form['#post']['taxonomy'] as $key => $terms){
@@ -176,7 +185,7 @@ function autotag_form_alter($form_id, &$form){
         $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$place_holders).") ORDER BY name", $terms);
         while($term=db_fetch_object($results)){
           if(!in_array($term,$ignore_terms)){
-            $lists .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.$term->name.' ('.$vocabularies[$term->vid]->name.')</li>';
+            $lists .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
           }
         }
       }
@@ -203,7 +212,7 @@ function autotag_form_alter($form_id, &$form){
     $vocabs_string = '';
     $concater = '';
     foreach($vocabs as $vocab){
-      $vocabs_string .= $concater.' '.$vocab->name;
+      $vocabs_string .= $concater.' '.check_plain($vocab->name);
       $concater = ';';
     }
     $form['autotag']['additionaltags'] = array(
@@ -335,10 +344,12 @@ function autotag_admin_settings() {
     $type = $type->type;
     // Fieldset for each content type
     $form[$type] = array('#type'=>'fieldset','#title'=>$type,'#collapsible'=>true,'#collapsed'=>true);
-    $newform = content_admin_display_overview_form($type);
-    foreach($newform['fields'] as $fieldname => $fieldarray){
-      if($fieldarray['type']['#value'] == 'Text'){
-        $options[$fieldname]=$fieldname;
+    if(function_exists('content_admin_display_overview_form')){
+      $newform = content_admin_display_overview_form($type);
+      foreach($newform['fields'] as $fieldname => $fieldarray){
+        if($fieldarray['type']['#value'] == 'Text'){
+          $options[$fieldname]=$fieldname;
+        }
       }
     }
     if(function_exists($type.'_form')){
