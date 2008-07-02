@@ -28,7 +28,7 @@ function autotag_install(){
   $taxonomy_weight = array_pop(db_fetch_array(db_query("SELECT weight FROM {system} WHERE name='taxonomy'")));
   db_query("UPDATE {system} SET weight=%d WHERE name='autotag'", $taxonomy_weight+1);
   // Set the high and low NID
-  $hign_nid = array_pop(db_fetch_array(db_query("SELECT nid FROM {node} ORDER BY nid DESC LIMIT 1")));
+  $hign_nid = @array_pop(db_fetch_array(db_query("SELECT nid FROM {node} ORDER BY nid DESC LIMIT 1")));
   variable_set('autotag_last_node',$hign_nid);
   variable_set('autotag_cron_highest_nid', $hign_nid);
   

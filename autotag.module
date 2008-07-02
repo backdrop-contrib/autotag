@@ -128,7 +128,8 @@ function autotag_form_alter($form_id, &$form){
     if(in_array($key,$hide_vids)){
       $form['taxonomy'][$key] = array(
         '#type' => 'hidden',
-        '#default_value' => $form['taxonomy'][$key]['#default_value']
+        '#default_value' => $form['taxonomy'][$key]['#default_value'],
+        '#theme' => 'autotag_hidden'
       );
     }
   }
@@ -175,6 +176,8 @@ function autotag_form_alter($form_id, &$form){
       foreach($ignore_terms as $term){
         $ignore_list .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
       }
+    } else {
+      $ignore_terms = array();
     }
     foreach($form['#post']['taxonomy'] as $key => $terms){
       if($key != 'tags'){
@@ -182,10 +185,12 @@ function autotag_form_alter($form_id, &$form){
         foreach($terms as $doesntmatter){
           $place_holders[] = '%d';
         }
-        $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$place_holders).") ORDER BY name", $terms);
-        while($term=db_fetch_object($results)){
-          if(!in_array($term,$ignore_terms)){
-            $lists .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
+        if(count($place_holders)){
+          $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$place_holders).") ORDER BY name", $terms);
+          while($term=db_fetch_object($results)){
+            if(!in_array($term,$ignore_terms)){
+              $lists .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
+            }
           }
         }
       }
@@ -271,6 +276,15 @@ function autotag_menu($maycache){
   return $items;
 }
 
+/***********************************************************************************
+ * THEME FUNCTION
+ ***********************************************************************************/
+function theme_autotag_hidden(){
+  if(is_array($element['#value'])){
+    $element['#value'] = 'Lots of values';
+  }
+  return '<input type="hidden" name="'. $element['#name'] .'" id="'. $element['#id'] .'" value="'. check_plain($element['#value']) ."\" ". drupal_attributes($element['#attributes']) ." />\n";
+}
 /***********************************************************************************
  * AUTOCOMPLETE FUNCTION
  ***********************************************************************************/
@@ -484,7 +498,7 @@ function _autotag_search_field($field, $vids){
     }
   } else {
     // Only search if there is text
-    if(trim($field)==''){return;}
+    if(trim($field)==''){return array();}
     // Field is raw text search it for stuff
     $words = preg_split("/[^A-Za-z0-9]+/",strtolower($field));
     $results;
@@ -503,52 +517,54 @@ function _autotag_search_field($field, $vids){
       $vids_placeholder[] = "%d";
     }
     // Check if leftandright module is installed
-    if(function_exists('leftandright_get_tree')){
-      $results = db_query("SELECT tid, vid FROM {leftandright} WHERE lowername IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")UNION SELECT t.tid, t.vid FROM {term_data} t, {term_synonym} s WHERE s.tid = t.tid AND LOWER(s.name) IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")", array_merge($words,$vids,$words,$vids));
-    } else {
-      $results = db_query("SELECT t.tid, t.vid FROM {term_data} t LEFT JOIN {term_synonym} s ON s.tid = t.tid WHERE(LOWER(t.name) IN (".implode(",",$words_placeholder).") OR LOWER(s.name) IN (".implode(",",$words_placeholder).")) AND vid IN (".implode(",",$vids_placeholder).")", array_merge($words, $words, $vids));
-    }
-    while($row=db_fetch_array($results)){
-      $terms[] = array('tid'=>$row['tid'], 'vid'=>$row['vid']);
-    }
-    $total_words = count($words);
-    $sql_array = array();
-    $sql_array_syn = array();
-    $words_array = array();
-    $words_array_syn = array();
-    for($i=0;$i<$total_words-1;$i++){
-      if(trim($words[$i])!="" && trim($words[$i+1])!=""){
-        // Now lets search for "pairs" and search on "like".  If any hit, check back on the result against
-        // the original field
-        if(function_exists('leftandright_get_tree')){
-          $sql_array[] = " lowername LIKE '%s%%%s%%' ";
-          $words_array[] = $words[$i];
-          $words_array[] = $words[$i+1];
-          $sql_array_syn[] = " LOWER(name) LIKE '%s%%%s%%' ";
-          $words_array_syn[] = $words[$i];
-          $words_array_syn[] = $words[$i+1];
-        } else {
-          $sql_array[] = " LOWER(s.name) LIKE '%s%%%s%%' OR LOWER(t.name) LIKE '%s%%%s%%' ";
-          $words_array[] = $words[$i];
-          $words_array[] = $words[$i+1];
-          $words_array[] = $words[$i];
-          $words_array[] = $words[$i+1];
-        }
-      }
-    }
-    if(count($sql_array)){
-      // FIXME FIXME FIXME
+    if(count($words_placeholder)){
       if(function_exists('leftandright_get_tree')){
-        $results = db_query("SELECT tid FROM {leftandright} WHERE ".implode(" OR ",$sql_array)." UNION SELECT tid FROM {term_synonym} WHERE ".implode(" OR ",$sql_array_syn), array_merge($words_array, $words_array_syn));
+        $results = db_query("SELECT tid, vid FROM {leftandright} WHERE lowername IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")UNION SELECT t.tid, t.vid FROM {term_data} t, {term_synonym} s WHERE s.tid = t.tid AND LOWER(s.name) IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")", array_merge($words,$vids,$words,$vids));
       } else {
-        $results = db_query("SELECT t.tid FROM {term_data} t LEFT JOIN {term_synonym} s ON s.tid = t.tid WHERE ".implode(" OR ",$sql_array), $words_array);
+        $results = db_query("SELECT t.tid, t.vid FROM {term_data} t LEFT JOIN {term_synonym} s ON s.tid = t.tid WHERE(LOWER(t.name) IN (".implode(",",$words_placeholder).") OR LOWER(s.name) IN (".implode(",",$words_placeholder).")) AND vid IN (".implode(",",$vids_placeholder).")", array_merge($words, $words, $vids));
       }
       while($row=db_fetch_array($results)){
-        // Get the full term name, and its synonyms, and check back against the field
-        $results_2 = db_query("SELECT tid,vid,LOWER(name) AS name FROM {term_data} WHERE tid = %d UNION SELECT s.tid,vid,LOWER(s.name) AS name FROM {term_synonym} s,{term_data} t WHERE s.tid = %d AND t.tid=s.tid",$row['tid'],$row['tid']);
-        while($row_2=db_fetch_array($results_2)){
-          if(strpos(strtolower($field),$row_2['name'])!== FALSE){
-            $terms[] = array('tid'=>$row_2['tid'],'vid'=>$row_2['vid']);
+        $terms[] = array('tid'=>$row['tid'], 'vid'=>$row['vid']);
+      }
+      $total_words = count($words);
+      $sql_array = array();
+      $sql_array_syn = array();
+      $words_array = array();
+      $words_array_syn = array();
+      for($i=0;$i<$total_words-1;$i++){
+        if(trim($words[$i])!="" && trim($words[$i+1])!=""){
+          // Now lets search for "pairs" and search on "like".  If any hit, check back on the result against
+          // the original field
+          if(function_exists('leftandright_get_tree')){
+            $sql_array[] = " lowername LIKE '%s%%%s%%' ";
+            $words_array[] = $words[$i];
+            $words_array[] = $words[$i+1];
+            $sql_array_syn[] = " LOWER(name) LIKE '%s%%%s%%' ";
+            $words_array_syn[] = $words[$i];
+            $words_array_syn[] = $words[$i+1];
+          } else {
+            $sql_array[] = " LOWER(s.name) LIKE '%s%%%s%%' OR LOWER(t.name) LIKE '%s%%%s%%' ";
+            $words_array[] = $words[$i];
+            $words_array[] = $words[$i+1];
+            $words_array[] = $words[$i];
+            $words_array[] = $words[$i+1];
+          }
+        }
+      }
+      if(count($sql_array)){
+        // FIXME FIXME FIXME
+        if(function_exists('leftandright_get_tree')){
+          $results = db_query("SELECT tid FROM {leftandright} WHERE ".implode(" OR ",$sql_array)." UNION SELECT tid FROM {term_synonym} WHERE ".implode(" OR ",$sql_array_syn), array_merge($words_array, $words_array_syn));
+        } else {
+          $results = db_query("SELECT t.tid FROM {term_data} t LEFT JOIN {term_synonym} s ON s.tid = t.tid WHERE ".implode(" OR ",$sql_array), $words_array);
+        }
+        while($row=db_fetch_array($results)){
+          // Get the full term name, and its synonyms, and check back against the field
+          $results_2 = db_query("SELECT tid,vid,LOWER(name) AS name FROM {term_data} WHERE tid = %d UNION SELECT s.tid,vid,LOWER(s.name) AS name FROM {term_synonym} s,{term_data} t WHERE s.tid = %d AND t.tid=s.tid",$row['tid'],$row['tid']);
+          while($row_2=db_fetch_array($results_2)){
+            if(strpos(strtolower($field),$row_2['name'])!== FALSE){
+              $terms[] = array('tid'=>$row_2['tid'],'vid'=>$row_2['vid']);
+            }
           }
         }
       }
@@ -649,7 +665,9 @@ function _autotag_update_table($nid, $values){
       $tids_nids[] = $value;
     }
   }
-  db_query("INSERT INTO {autotag} (nid, tid) VALUES ".implode(",",$tids_nid_placeholder), $tids_nids);
+  if(count($tids_nid_placeholder)){
+    db_query("INSERT INTO {autotag} (nid, tid) VALUES ".implode(",",$tids_nid_placeholder), $tids_nids);
+  }
 }
 
 /**
