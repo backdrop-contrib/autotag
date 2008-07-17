@@ -517,7 +517,7 @@ function _autotag_search_field($field, $vids){
       $vids_placeholder[] = "%d";
     }
     // Check if leftandright module is installed
-    if(count($words_placeholder)){
+    if(count($words_placeholder) && count($vids)){
       if(function_exists('leftandright_get_tree')){
         $results = db_query("SELECT tid, vid FROM {leftandright} WHERE lowername IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")UNION SELECT t.tid, t.vid FROM {term_data} t, {term_synonym} s WHERE s.tid = t.tid AND LOWER(s.name) IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")", array_merge($words,$vids,$words,$vids));
       } else {

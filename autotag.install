@@ -36,7 +36,7 @@ function autotag_install(){
   $modules = module_list();
   if(!isset($modules['jquib']) && !(isset($modules['jquery_ui']) && isset($modules['jquery_update']))){
     // Required modules aren't installed
-    drupal_set_message('You must install either "jQUIB" or "JQuery UI and JQuery Update"');
+    drupal_set_message('You must install either "jQUIB" or "JQuery UI and JQuery Update"','error');
   }
 }
 
