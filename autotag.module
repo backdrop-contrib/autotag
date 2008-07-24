@@ -143,12 +143,20 @@ function autotag_form_alter($form_id, &$form){
   } 
   // If on the second page, do a whole load of magic
   else {
-    // Add the hidden taxonomy fields to the post stuff (not sure if this is actually necesary)
-    // FIXME / TEST
+    // Add the hidden taxonomy fields to the post stuff (needed to ensure we don't lose tagged shit)
     if(isset($form['#node']->taxonomy)){
       foreach($form['#node']->taxonomy as $term){
         if(!in_array($term->tid,$form['#post']['taxonomy'][$term->vid])){
-          $form['#post']['taxonomy'][$term->vid][] = $term->tid;
+          if(isset($form['#post']['taxonomy'][$term->vid])){
+            if(!is_array($form['#post']['taxonomy'][$term->vid])){
+              $current_value = $form['#post']['taxonomy'][$term->vid];
+              $form['#post']['taxonomy'][$term->vid] = array();
+              $form['#post']['taxonomy'][$term->vid][] = $current_value;
+            }
+            $form['#post']['taxonomy'][$term->vid][] = $term->tid;
+          } else {
+            $form['#post']['taxonomy'][$term->vid] = $term->tid;
+          }
         }
       }
     }
@@ -179,17 +187,19 @@ function autotag_form_alter($form_id, &$form){
     } else {
       $ignore_terms = array();
     }
-    foreach($form['#post']['taxonomy'] as $key => $terms){
-      if($key != 'tags'){
-        $place_holders = array();
-        foreach($terms as $doesntmatter){
-          $place_holders[] = '%d';
-        }
-        if(count($place_holders)){
-          $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$place_holders).") ORDER BY name", $terms);
-          while($term=db_fetch_object($results)){
-            if(!in_array($term,$ignore_terms)){
-              $lists .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
+    if(is_array($form['#post']['taxonomy'])){
+      foreach($form['#post']['taxonomy'] as $key => $terms){
+        if($key != 'tags'){
+          $place_holders = array();
+          foreach($terms as $doesntmatter){
+            $place_holders[] = '%d';
+          }
+          if(count($place_holders)){
+            $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$place_holders).") ORDER BY name", $terms);
+            while($term=db_fetch_object($results)){
+              if(!in_array($term,$ignore_terms)){
+                $lists .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
+              }
             }
           }
         }
@@ -230,9 +240,12 @@ function autotag_form_alter($form_id, &$form){
     // FIXME, this may well stop people from tagging the content of a page at all, not sure
     // what the solution to this could be though, as a second page could become annoying, hence
     // the reason for this additional JS.
+    /**
+     * Removed for now - I'm not keed on this - users can click submit if they want!!!    
     if($lists == '' && $ignore_list == ''){
       drupal_add_js('$("#edit-submit2").click();</script>','inline','footer');
     }
+    */
     // END OF PAGE 2 EXTRAS
   }
   // Hidden field which is updated by Javascript when the form is submitted
@@ -463,6 +476,11 @@ function _autotag_search_form($form){
           $form['#post']['taxonomy'][$term['vid']][] = $term['tid'];
         }
         elseif(!in_array($term['tid'],$form['#post']['taxonomy'][$term['vid']])){
+          if(!is_array($form['#post']['taxonomy'][$term['vid']])){
+            $current_value = $form['#post']['taxonomy'][$term['vid']];
+            $form['#post']['taxonomy'][$term['vid']] = array();
+            $form['#post']['taxonomy'][$term['vid']][] = $current_value;
+          }
           $form['#post']['taxonomy'][$term['vid']][] = $term['tid'];
         }
       }
