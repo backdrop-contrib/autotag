@@ -26,7 +26,7 @@ function autotag_install(){
   }
   //Get taxonomy's weight, and increase it by one
   $taxonomy_weight = array_pop(db_fetch_array(db_query("SELECT weight FROM {system} WHERE name='taxonomy'")));
-  db_query("UPDATE {system} SET weight=%d WHERE name='autotag'", $taxonomy_weight+1);
+  db_query("UPDATE {system} SET weight=%d WHERE name='autotag'", $taxonomy_weight+10);
   // Set the high and low NID
   $hign_nid = @array_pop(db_fetch_array(db_query("SELECT nid FROM {node} ORDER BY nid DESC LIMIT 1")));
   variable_set('autotag_last_node',$hign_nid);
@@ -38,6 +38,17 @@ function autotag_install(){
     // Required modules aren't installed
     drupal_set_message('You must install either "jQUIB" or "JQuery UI and JQuery Update"','error');
   }
+}
+
+/**
+ * Increase the weight of the autotag module to allow a greater number of modules to have a weight
+ * between the value of taxonomy's and this module's
+ */
+function autotag_update_1(){
+  $ret = array();
+  $taxonomy_weight = array_pop(db_fetch_array(db_query("SELECT weight FROM {system} WHERE name='taxonomy'")));
+  $ret[] = update_sql("UPDATE {system} SET weight=".($taxonomy_weight+10)." WHERE name='autotag'");
+  return $ret;
 }
 
 function autotag_uninstall(){

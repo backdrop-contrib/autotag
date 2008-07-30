@@ -133,7 +133,6 @@ function autotag_form_alter($form_id, &$form){
       );
     }
   }
-  
   // If on the first page, simply change the button from submit to next, and
   // also remove any redirects and submit functions that may have been on the form.
   if($step<2){
@@ -156,6 +155,27 @@ function autotag_form_alter($form_id, &$form){
             $form['#post']['taxonomy'][$term->vid][] = $term->tid;
           } else {
             $form['#post']['taxonomy'][$term->vid] = $term->tid;
+          }
+        }
+      }
+    } else {
+      // New node - however, it could have had the term set by something like 
+      // view_controls - so we need to look for this
+      if(isset($form['taxonomy'])){
+        foreach($form['taxonomy'] as $vid => $values){
+          if(is_numeric($vid)){
+            foreach($values['#default_value'] as $tid){
+              if(isset($form['#post']['taxonomy'][$vid])){
+                if(!is_array($form['#post']['taxonomy'][$vid])){
+                  $current_value = $form['#post']['taxonomy'][$vid];
+                  $form['#post']['taxonomy'][$vid] = array();
+                  $form['#post']['taxonomy'][$vid][] = $current_value;
+                }
+                $form['#post']['taxonomy'][$vid][] = $tid;
+              } else {
+                $form['#post']['taxonomy'][$vid] = $tid;
+              }
+            }
           }
         }
       }
@@ -191,8 +211,13 @@ function autotag_form_alter($form_id, &$form){
       foreach($form['#post']['taxonomy'] as $key => $terms){
         if($key != 'tags'){
           $place_holders = array();
-          foreach($terms as $doesntmatter){
+          if(is_array($terms)){
+            foreach($terms as $doesntmatter){
+              $place_holders[] = '%d';
+            }
+          } else {
             $place_holders[] = '%d';
+            $terms = array($terms);
           }
           if(count($place_holders)){
             $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$place_holders).") ORDER BY name", $terms);
@@ -643,9 +668,11 @@ function _autotag_submit($node){
       foreach($node->taxonomy as $vid => $taxonomy_vocab){
         if(isset($taxonomy_vocab[$term])){
           unset($node->taxonomy[$vid][$term]);
-          unset($node->taxonomy[$vid][array_search($term,$node->taxonomy[$vid])]);
-          $values[] = $term;
         }
+        while(array_search($term,$node->taxonomy[$vid])!==false){
+          unset($node->taxonomy[$vid][array_search($term,$node->taxonomy[$vid])]);
+        }
+        $values[] = $term;
       }
     }
   }
