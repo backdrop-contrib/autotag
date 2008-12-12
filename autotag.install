@@ -1,29 +1,15 @@
 <?php
 /**
- * This file helps with the install of the autotag module.  All it does is sets the highest node ID for 
- * nodes which cron will search.  Cron eventually becomes unnecessary for this module.
+ * This file helps with the install of the autotag module.  All it does is sets
+ * the highest node ID for nodes which cron will search.  Cron eventually
+ * becomes unnecessary for this module.
  */
 /**
  * Implementation of hook_install
  */
 function autotag_install(){
-  switch ($GLOBALS['db_type']){
-    case 'mysql':
-    case 'mysqli':
-      db_query("CREATE TABLE {autotag} (
-        nid INT(10),
-        tid INT(10),
-        CONSTRAINT {autotag}_primary_key PRIMARY KEY (tid,nid)
-      )");
-      break;
-    case 'pgsql':
-      db_query("CREATE TABLE {autotag} (
-        nid int_unsigned NOT NULL,
-        tid int_unsigned NOT NULL,
-        PRIMARY KEY (tid, nid)
-      )");
-      break;
-  }
+  // Create tables.
+  drupal_install_schema('autotag');
   //Get taxonomy's weight, and increase it by one
   $taxonomy_weight = array_pop(db_fetch_array(db_query("SELECT weight FROM {system} WHERE name='taxonomy'")));
   db_query("UPDATE {system} SET weight=%d WHERE name='autotag'", $taxonomy_weight+10);
@@ -33,25 +19,32 @@ function autotag_install(){
   variable_set('autotag_cron_highest_nid', $hign_nid);
   
   // Check that the necesary module(s) is/are installed.
+  // TODO Are any of these needed anymore?
+  /*
   $modules = module_list();
   if(!isset($modules['jquib']) && !(isset($modules['jquery_ui']) && isset($modules['jquery_update']))){
     // Required modules aren't installed
     drupal_set_message('You must install either "jQUIB" or "JQuery UI and JQuery Update"','error');
-  }
+  }*/
 }
-
 /**
- * Increase the weight of the autotag module to allow a greater number of modules to have a weight
- * between the value of taxonomy's and this module's
+ * Implementation of hook_schema
  */
-function autotag_update_1(){
-  $ret = array();
-  $taxonomy_weight = array_pop(db_fetch_array(db_query("SELECT weight FROM {system} WHERE name='taxonomy'")));
-  $ret[] = update_sql("UPDATE {system} SET weight=".($taxonomy_weight+10)." WHERE name='autotag'");
-  return $ret;
+function autotag_schema(){
+  $tables['autotag'] = array(
+    'fields' => array(
+      'nid' => array('type' => 'int', 'length' => 10, 'not null' => true),
+      'tid' => array('type' => 'int', 'length' => 10, 'not null' => true)),
+    'primary key' => array('nid', 'tid'));
+  return $tables;
 }
-
+/**
+ * Increase the weight of the autotag module to allow a greater number of
+ * modules to have a weight between the value of taxonomy's and this module's
+ */
 function autotag_uninstall(){
+  // Remove tables.
+  drupal_uninstall_schema('autotag');
+
   db_query("DELETE FROM {variable} WHERE name LIKE 'autotag_%'");
-  db_query("DROP TABLE {autotag}");
 }
