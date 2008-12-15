@@ -10,31 +10,9 @@
  * number of nodes to search on cron.  Once all nodes have been search by cron,
  * this module shouldn't do anything on a cron run.
  */
-
-/***********************************************************************************
- * TEXT i8n
- ***********************************************************************************/
-define('AUTOTAG_DESCRIPTION','The terms in the "Terms to tag" box were found in your text. Drag \'n\' drop the terms from the "Terms to tag" box to the "Terms to ignore" box if you don\'t want this page/node to be tagged with that term');
-define('AUTOTAG_TITLE','Discovered tags');
-define('AUTOTAG_TAGGED','Terms to use');
-define('AUTOTAG_IGNORE','Terms to ignore');
-define('AUTOTAG_SETTINGS','Autotag settings');
-define('AUTOTAG_CRON_SETTINGS','Cron settings');
-define('AUTOTAG_SETTINGS_DESC','Change the default autotag settings to include or exclude fields when automatically tagging content.');
-define('AUTOTAG_CRON_NUM','Number of nodes to update on cron');
-define('AUTOTAG_CRON_NUM_DESC','Sets the number of nodes to automatically tag when cron is run.  This allows for content created before the module was installed to be automatically tagged.');
-define('AUTOTAG_HIGH_NID','Highest node ID to autotag');
-define('AUTOTAG_HIGH_NID_DESC','Sets the highest node ID to be automatically tagged.  Set this to the last nid to be created in order to ensure all nodes are autotagged');
-define('AUTOTAG_LOW_NID','Lowest node ID to autotag');
-define('AUTOTAG_LOW_NID_DESC','Sets the lowest node ID to be automatically tagged.  Set this to zero in order to ensure all nodes are autotagged.  If this is set to the same value as "Highest nid to autotag", then no autotagging will be performed.');
-define('AUTOTAG_IGNORE_FIELDS',"Fields to ignore in content type '%type'");
-define('AUTOTAG_IGNORE_FIELDS_DESC','Uncheck a field if you don\'t want it to be searched for taxonomy terms');
-define('AUTOTAG_ADDITIONAL_TERMS','Additional terms to tag this node with');
-define('AUTOTAG_ADDITIONAL_TERMS_DESC','Terms can be selected from (multiple terms seperated by a comma):');
-define('AUTOTAG_SUBMIT2_TEXT','Once finished reviewing the taxonomy terms, simply press submit.  You may also review what you have entered below, if you feel a tag hasn\'t been found');
-/***********************************************************************************
+/*******************************************************************************
  * HOOKS
- ***********************************************************************************/
+ ******************************************************************************/
 /**
  * Implementation of hook_nodeapi
  * 
@@ -49,11 +27,23 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
       $tids_to_ignore = explode("|",$node->hideterms);
       // Remove the ignore ones from the add ones
       $terms = $node->taxonomy;
+      //kprint_r($terms);
       foreach($all_tids as $tid){
         if(!in_array($tid['tid'], $tids_to_ignore)){
           if(!isset($terms[$tid['vid']]) || !in_array($tid['tid'], $terms[$tid['vid']])){
             $terms[$tid['vid']][] = $tid['tid'];
           }
+        }
+      }
+      // We've also got additional tags
+      $vids = _autotag_get_vids_for_type($node->type);
+      $regexp = '%(?:^|,\ *)("(?>[^"]*)(?>""[^"]* )*"|(?: [^",]*))%x';
+      preg_match_all($regexp, $node->additionaltags, $matches);
+      $words = $matches[1];
+      $result = db_query("SELECT tid, name FROM {term_data} WHERE vid IN (%s) AND LOWER(name) IN ('%s')", implode(",",$vids), implode("','", $words));
+      while($row = db_fetch_array($result)){
+        if(!isset($terms[$row['vid']]) || !in_array($row['tid'], $terms[$row['vid']])){
+          $terms[$row['vid']][] = $row['tid'];
         }
       }
       taxonomy_node_save($node, $terms);
@@ -63,32 +53,30 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
 }
 
 /**
- * Implementation of hook_cron
+ * Implementation of hook_menu
  * 
- * This function looks over old node content, and tags it in the same way as if it had been
- * edited/created after this module was installed.
-function autotag_cron(){
-  // Get the last node to be updated with cron.
-  $last_nid = variable_get('autotag_last_node',0);
-  $highest_nid = variable_get('autotag_cron_highest_nid',PHP_INT_MAX);
-  $num_to_update = variable_get('autotag_nodes_to_search',50);
-  
-  // If they've all been searched, simply return
-  if($last_nid >= $highest_nid){return;}
-  
-  // Get the nodes and search them
-  $results = db_query("SELECT nid FROM {node} WHERE nid > %d AND nid <= %d ORDER by nid ASC LIMIT %d", $last_nid, $highest_nid, $num_to_update);
-  while($row = db_fetch_array($results)){
-    $node = node_load($row);
-    _autotag_search($node);
-    node_save($node);
-    $last_nid = $node->nid;
-  }
-  variable_set('autotag_last_node', $last_nid);
-}
+ * Needed only for the module's settings page, and the autocomplete function
  */
+function autotag_menu(){
+  $items = array();
+  $items['autotag/autocomplete'] = array(
+    'title' => 'Autocomplete autotag thingumy',
+    'page callback' => 'autotag_autocomplete',
+    'access arguments' => array('create node content'),
+    'type' => MENU_CALLBACK    
+  );
+  return $items;
+}
 
-// Simply save what was entered in the checkbox
+/**
+ * hook_form_alter is further down (in a section of its own due to its size)
+ */
+/*******************************************************************************
+ * FORM SUBMIT
+ ******************************************************************************/
+/**
+ * Simply save what was entered in the checkbox
+ */
 function autotag_submit_vocabulary_form($form, $form_values){
   // Merge the array with what is already there.
   $disable_vids = variable_get('autotag_disable_vids', array());
@@ -96,20 +84,35 @@ function autotag_submit_vocabulary_form($form, $form_values){
   variable_set('autotag_disable_vids', $disable_vids);
 }
 
-// Receive the form after the first page, nothing is done after the second.
+/**
+ * Receive the form after the first page, nothing is done after the second.
+ */
 function autotag_form_submit($form, &$form_state){
   if(isset($form_state['storage']['formbuttons'])){
     // After first page we store the form so that it can be restored on the 
     // second page
     $form_state['storage']['formsubmitted'] = $form;
+  } else {
+    // Restore the hidden form fields from the old form for taxonomy
+    $hide_vids = _autotag_get_vids_for_type($form['type']['#value']);
+    foreach($form['taxonomy'] as $key=>$value){
+      if(in_array($key,$hide_vids)){
+        $form_state['values']['taxonomy'][$key] = $form_state['storage']['oldtaxonomy'][$key]['#default_value'];
+      }
+    }
+    // Unset storage to ensure the form isn't presented to the user again.
+    unset($form_state['storage']['oldtaxonomy']);
   }
 }
 
+/*******************************************************************************
+ * FORM ALTER
+ ******************************************************************************/
 /**
  * Implementation of hook_form_alter
  * 
- * Changes the form so that it takes place over multiple pages, adding the necesary 
- * fields to do that.
+ * Changes the form so that it takes place over multiple pages, adding the
+ * necesary fields to do that.
  */
 function autotag_form_alter(&$form, &$form_state, $form_id){
   // If this is not a node form, check if it is the taxonomy vocabulary form.
@@ -120,12 +123,11 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
     if($form['#id'] == 'taxonomy-form-vocabulary' && $form['module']['#value']=='taxonomy'){
       // Here we can add the extra field
       $disable_vids = variable_get('autotag_disable_vids', array());
-      
       $form['settings']['disableautotag'] = array(
         '#type' => 'checkbox',
         '#title' => t('Disable Autotag'),
-        '#default_value' => isset($diable_vids[$form['vid']['#value']]) ? $diable_vids[$form['vid']['#value']] : 0,  
-        '#description' => t('If checked, this Vocabulary will not be used by the Autotagger')
+        '#default_value' => isset($disable_vids[$form['vid']['#value']]) ? $disable_vids[$form['vid']['#value']] : 0,  
+        '#description' => t('If checked, this Vocabulary will not be used by the Autotagger (Vocabularies that are marked as "Multiple Select" and are NOT makred as "Tags" or "Required" will use autotagger)')
       );
       // Finally we need a submit function
       $form['#submit'][] = 'autotag_submit_vocabulary_form';
@@ -146,8 +148,13 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
   // We're here, the form needs some changes, so lets get to it.
  
   // If the form has NOT been submitted, we change the submit button name to
-  // next, and remove submit functions from the form, FIXME - Also check to see
-  // if there is an error on the form
+  // next, and remove submit functions from the form
+  
+  // Firstly, we check to see if the oldtaxonomy is in storage, if not, we put
+  // it there.
+  if(!isset($form_state['storage']['oldtaxonomy'])){
+    $form_state['storage']['oldtaxonomy'] = $form['taxonomy'];
+  }
   
   // Lets make sure the form is valid, we can do this by checking if there are
   // any error messages - FIXME - NOT A GOOD WAY OF DOING THIS, BUT I CAN'T
@@ -155,15 +162,26 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
   // <rant>Why can't form state store the valid status of a form?</rant>
   $form_is_valid = !count(drupal_get_messages('error',FALSE));
   if((!$form_state['submitted'] && !$form_state['post']) || !$form_is_valid){
-    // Hide the taxonomy fields -> this can greatly improve the rendering time for
-    // a page with a large classification on it.  We do this on all pages
-    // First put the taxonomy in storage!
-    $form_state['storage']['oldtaxonomy'] = $form['taxonomy'];
+    // Hide the taxonomy fields -> this can greatly improve the rendering time 
+    // for a page with a large classification on it.  We do this on all pages
     foreach($form['taxonomy'] as $key=>$value){
       if(in_array($key,$hide_vids)){
         unset($form['taxonomy'][$key]);
       }
     }
+    // Hide the taxonomy fieldset if there is nothing left in it.
+    $taxonomy_keys = array_keys($form['taxonomy']);
+    $unset = true;
+    foreach($taxonomy_keys as $key){
+      if(substr($key, 0, 1)!='#'){
+        $unset = false;
+      }
+    }
+    if($unset){
+      // Leave it hidden (not sure why), rather than unset-ing
+      $form['taxonomy']['#type'] = 'hidden';
+    }
+    
     // Store the stubmit for use later
     $form_state['storage']['formbuttons'] = $form['buttons'];
     $form_state['storage']['formsubmit'] = $form['#submit']; 
@@ -235,11 +253,11 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
     }
     // Keep stuff as it is, just add the autotag bollocks to the top      
     $form['autotag']['#type'] = 'fieldset';
-    $form['autotag']['#title'] = t(AUTOTAG_TITLE);
+    $form['autotag']['#title'] = t('Discovered tags');
     $form['autotag']['#collapsed'] = true;
     $form['autotag']['#collapsible'] = false;
     $form['autotag']['#weight'] = -100;
-    $form['autotag']['#description'] = t(AUTOTAG_DESCRIPTION);
+    $form['autotag']['#description'] = t('The terms in the "Terms to tag" box were found in your text. Drag \'n\' drop the terms from the "Terms to tag" box to the "Terms to ignore" box if you don\'t want this page/node to be tagged with that term');
     $form['autotag']['ignoreterms'] = array(
       '#type' => 'hidden'
     );
@@ -282,13 +300,13 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
     $form['autotag']['dragndropfields'] = array(
       '#value' => '<div class="autotag-dnd" id="autotag-container">
   <div id="autotag-dnd-left">
-    <h3>'.t(AUTOTAG_TAGGED).'</h3>
+    <h3>'.t('Terms to use').'</h3>
     <ul>
       '.$lists.'
     </ul>
   </div>
   <div id="autotag-dnd-right">
-    <h3>'.t(AUTOTAG_IGNORE).'</h3>
+    <h3>'.t('Terms to ignore').'</h3>
     <ul>
       '.$ignore_list.'
     </ul>
@@ -306,8 +324,8 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
     }
     $form['autotag']['additionaltags'] = array(
       '#type' => 'textfield',
-      '#title' => t(AUTOTAG_ADDITIONAL_TERMS),
-      '#description' => t(AUTOTAG_ADDITIONAL_TERMS_DESC).$vocabs_string,
+      '#title' => t('Additional terms to tag this node with'),
+      '#description' => t('Terms can be selected from (multiple terms seperated by a comma):').$vocabs_string,
       '#autocomplete_path' => 'autotag/autocomplete/'.$form['type']['#value']
     );
   }
@@ -320,34 +338,12 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
   );
   // Additional submit button higher up the page so that lazy f*&kers don't have to 
   // scroll down.
-  $form['submit']['#value'] = $button_name;
-  if($step==2){
-    $form['autotag']['submit2'] = $form['submit'];
-    $form['autotag']['submit2']['#prefix'] = '<div class="description">'.t(AUTOTAG_SUBMIT2_TEXT).'</div>';
+  
+  if(isset($form['autotag']['dragndropfields'])){
+    $form['autotag']['submit'] = $form['buttons']['submit'];
+    $form['autotag']['submit']['#prefix'] = '<div class="description">'.t('Once finished reviewing the taxonomy terms, simply press save.  You may also review what you have entered below, if you feel a tag hasn\'t been found').'</div>';
+    $form['autotag']['submit']['#weight'] = 1000;
   }
-}
-
-/**
- * Implementation of hook_menu
- * 
- * Needed only for the module's settings page, and the autocomplete function
- */
-function autotag_menu(){
-  $items = array();
-  $items['admin/settings/autotag'] = array(
-    'title' => AUTOTAG_SETTINGS,
-    'description' => AUTOTAG_SETTINGS_DESC,
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('autotag_admin_settings'),
-    'access arguments' => array('administer site configuration')
-  );
-  $items['autotag/autocomplete'] = array(
-    'title' => 'Autocomplete autotag thingumy',
-    'page callback' => 'autotag_autocomplete',
-    'access arguments' => array('create node content'),
-    'type' => MENU_CALLBACK    
-  );
-  return $items;
 }
 /***********************************************************************************
  * AUTOCOMPLETE FUNCTION
@@ -382,86 +378,6 @@ function autotag_autocomplete($type, $string){
   }
 }
 /***********************************************************************************
- * SETTINGS PAGE
- ***********************************************************************************/
-/**
- * Autotag settings page
- */
-function autotag_admin_settings() {
-  // Get the messages so that they can be set afterwards
-  $messages = drupal_get_messages();
-  // Get all the content types to show on the form
-  $content_types = node_get_types('types');
-  $form = array();
-  // Field for setting number of nodes to update on Cron.
-  $options = array();
-  for($i=10;$i<=100;$i+=10){$options[$i]=$i;}
-  for($i=150;$i<=1000;$i+=50){$options[$i]=$i;}
-  $form['settings'] = array('#type'=>'fieldset','#title'=>t(AUTOTAG_CRON_SETTINGS),'#collapsible'=>false);
-  $form['settings']['autotag_nodes_to_search'] = array(
-    '#title' => t(AUTOTAG_CRON_NUM),
-    '#type' => 'select',
-    '#description' => t(AUTOTAG_CRON_NUM_DESC),
-    '#default_value' => variable_get('autotag_nodes_to_search',50),
-    '#options' => $options
-  );
-  $form['settings']['autotag_cron_highest_nid'] = array(
-    '#title' => t(AUTOTAG_HIGH_NID),
-    '#type' => 'textfield',
-    '#description' => t(AUTOTAG_HIGH_NID_DESC),
-    '#default_value' => variable_get('autotag_cron_highest_nid',2147483647)
-  );
-  $form['settings']['autotag_last_node'] = array(
-    '#title' => t(AUTOTAG_LOW_NID),
-    '#type' => 'textfield',
-    '#description' => t(AUTOTAG_LOW_NID_DESC),
-    '#default_value' => variable_get('autotag_last_node',0)
-  );
-  foreach($content_types as $type){
-    $options = array();
-    $type = $type->type;
-    // Fieldset for each content type
-    $form[$type] = array('#type'=>'fieldset','#title'=>$type,'#collapsible'=>true,'#collapsed'=>true);
-    if(function_exists('content_admin_display_overview_form')){
-      $newform = content_admin_display_overview_form($type);
-      foreach($newform['fields'] as $fieldname => $fieldarray){
-        if($fieldarray['type']['#value'] == 'Text'){
-          $options[$fieldname]=$fieldname;
-        }
-      }
-    }
-    if(function_exists($type.'_form')){
-      $newform = call_user_func($type.'_form');
-      foreach($newform as $field=>$fieldarray){
-        if(in_array('textfield',$fieldarray) || in_array('textarea',$fieldarray)){
-          $options[$field]=$field;
-        }
-      }
-    } else {
-      $options['title']='title';
-      $options['body']='body';
-    }
-    // Checkboxes for this content type
-    $form[$type]['autotag_selectfields_'.$type] = array(
-      '#type' => 'checkboxes',
-      '#title' => t(AUTOTAG_IGNORE_FIELDS,array('%type'=>$type)),
-      '#description' => t(AUTOTAG_IGNORE_FIELDS_DESC),
-      '#options'=> $options,
-      '#default_value'=>variable_get('autotag_selectfields_'.$type , array())
-    );
-  }
-  // Clear the messages set by content types with no extra fields
-  drupal_get_messages(null,true);
-  // Reset the old messages
-  foreach($messages as $type=>$messagearray){
-    foreach($messagearray as $message){
-      drupal_set_message($message,$type);
-    }
-  }
-  return system_settings_form($form);
-}
-
-/***********************************************************************************
  * PRIVATE/HELPER FUNCTIONS
  ***********************************************************************************/
 /**
@@ -474,6 +390,7 @@ function _autotag_get_vids_for_type($type, $just_vids = TRUE){
   foreach($vocabularies as $vocabulary){
     if(in_array($type,$vocabulary->nodes) && 
        $vocabulary->tags == 0 &&
+       $vocabulary->required == 0 &&
        $vocabulary->multiple == 1 &&
        $vocabulary->module == 'taxonomy' &&
        (
