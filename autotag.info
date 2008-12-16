@@ -1,13 +1,7 @@
 ; $Id$
 name = "Taxonomy Autotagger (autotag)"
-description = "Automatically tags nodes with terms from a specified taxonomy if... blah blah"
+description = "Automatically tags nodes with terms from a specified taxonomy if the term name is present with the text of the node"
 package = "EDIT"
 dependencies[] = taxonomy
-
-; Information added by drupal.org packaging script on 2008-07-24
-version = "5.x-1.10"
-project = "autotag"
-datestamp = "1216901703"
-
-
+dependencies[] = jquery_ui
 core = 6.x

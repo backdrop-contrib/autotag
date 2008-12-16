@@ -24,14 +24,26 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
     case 'update':
     case 'insert':
       $all_tids = _autotag_search_node($node);
-      $tids_to_ignore = explode("|",$node->hideterms);
+      $tids_to_ignore = explode("|",$node->hideterms);      
       // Remove the ignore ones from the add ones
       $terms = $node->taxonomy;
-      //kprint_r($terms);
       foreach($all_tids as $tid){
         if(!in_array($tid['tid'], $tids_to_ignore)){
           if(!isset($terms[$tid['vid']]) || !in_array($tid['tid'], $terms[$tid['vid']])){
             $terms[$tid['vid']][] = $tid['tid'];
+          }
+        }
+      }
+      // Remove the ignore ones, from terms already associated with the node
+      foreach($tids_to_ignore as $tid){
+        if(is_numeric($tid)){
+          // Remove this from $node->taxonomy
+          foreach($terms as $vocab_key => $vocab_value){
+            foreach($vocab_value as $term_key => $term_value){
+              if($term_value == $tid){
+                unset($terms[$vocab_key][$term_key]);
+              }
+            }
           }
         }
       }
@@ -40,11 +52,17 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
       $regexp = '%(?:^|,\ *)("(?>[^"]*)(?>""[^"]* )*"|(?: [^",]*))%x';
       preg_match_all($regexp, $node->additionaltags, $matches);
       $words = $matches[1];
-      $result = db_query("SELECT tid, name FROM {term_data} WHERE vid IN (%s) AND LOWER(name) IN ('%s')", implode(",",$vids), implode("','", $words));
-      while($row = db_fetch_array($result)){
-        if(!isset($terms[$row['vid']]) || !in_array($row['tid'], $terms[$row['vid']])){
-          $terms[$row['vid']][] = $row['tid'];
-        }
+      $words_place_holders = array();
+      foreach($words as $does_not_matter){
+        $words_place_holders[] = "'%s'";
+      }
+      if(count($words)){
+        $result = db_query("SELECT tid, name FROM {term_data} WHERE vid IN (%s) AND LOWER(name) IN (".implode(",",$words_place_holders).")", array_merge(array(implode(",",$vids)), $words));
+        while($row = db_fetch_array($result)){
+          if(!isset($terms[$row['vid']]) || !in_array($row['tid'], $terms[$row['vid']])){
+            $terms[$row['vid']][] = $row['tid'];
+          }
+        }      
       }
       taxonomy_node_save($node, $terms);
       _autotag_update_table($node->nid, $tids_to_ignore);
@@ -267,15 +285,13 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
     $vocabularies = taxonomy_get_vocabularies();      
     if(isset($form['#node']->nid)){
       $ignore_terms = _autotag_get_ignore_terms($form['#node']->nid);
-      foreach($ignore_terms as $term){
-        $ignore_list .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
-      }
     } else {
       $ignore_terms = array();
     }
+    $add_terms = array();
     if(is_array($form['#post']['taxonomy'])){
       foreach($form['#post']['taxonomy'] as $key => $terms){
-        if($key != 'tags'){
+        if(in_array($key, $hide_vids)){
           $place_holders = array();
           if(is_array($terms)){
             foreach($terms as $doesntmatter){
@@ -288,12 +304,18 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
           if(count($place_holders)){
             $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$place_holders).") ORDER BY name", $terms);
             while($term=db_fetch_object($results)){
+              $add_terms[] = $term;
               if(!in_array($term,$ignore_terms)){
                 $lists .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
               }
             }
           }
         }
+      }
+    }  
+    foreach($ignore_terms as $term){
+      if(in_array($term, $add_terms)){
+        $ignore_list .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
       }
     }
     // HTML shit for drag'n'droping
@@ -348,7 +370,7 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
 /***********************************************************************************
  * AUTOCOMPLETE FUNCTION
  ***********************************************************************************/
-function autotag_autocomplete($type, $string){
+function autotag_autocomplete($type = 'page', $string=''){
   $vids = _autotag_get_vids_for_type($type);
   /**
    * The following is taken straight from the taxonomy module, with a small alteration to the SQL
@@ -358,13 +380,13 @@ function autotag_autocomplete($type, $string){
   $array = $matches[1];
   
   // Fetch last tag
+  $matches = array();
   $last_string = trim(array_pop($array));
   if ($last_string != '') {
     $result = db_query_range(db_rewrite_sql("SELECT t.tid, t.name FROM {term_data} t WHERE t.vid IN (%s) AND LOWER(t.name) LIKE LOWER('%s%%')", 't', 'tid'), implode(",",$vids), $last_string, 0, 10);
   
     $prefix = count($array) ? implode(', ', $array) .', ' : '';
   
-    $matches = array();
     while ($tag = db_fetch_object($result)) {
       $n = $tag->name;
       // Commas and quotes in terms are special cases, so encode 'em.
@@ -373,9 +395,9 @@ function autotag_autocomplete($type, $string){
       }
       $matches[$prefix . $n] = check_plain($tag->name);
     }
-    print drupal_to_js($matches);
-    exit();
   }
+  print drupal_to_js($matches);
+  exit();
 }
 /***********************************************************************************
  * PRIVATE/HELPER FUNCTIONS
@@ -563,12 +585,6 @@ function _autotag_fields_to_search($node){
   $ignore_fields = array(
     'op','attach-url','nid','vid','status','type','created','comment','changed','promote','sticky','revision_timestamp','log','format','uid','name','picture','data','path','last_comment_timestamp','last_comment_name','comment_count','files','iid','taxonomy','readmore','content','links','additionaltags'
   );
-  $adminset_ignore_fields = variable_get('autotag_selectfields_'.$node->type , array());
-  foreach($adminset_ignore_fields as $field=>$value){
-    if($value !== 0){
-      $ignore_fields[] = $field;
-    }
-  }
   foreach($node as $key=>$value){
     if(!in_array($key, $ignore_fields)){
       $fields[] = $key;
@@ -581,12 +597,6 @@ function _autotag_fields_to_search_post($post_form, $type){
   $ignore_fields = array(
     'op','attach-url','nid','vid','status','type','created','comment','changed','promote','sticky','revision_timestamp','log','format','uid','name','picture','data','path','last_comment_timestamp','last_comment_name','comment_count','files','iid','taxonomy','readmore','content','links','additionaltags'
   );
-  $adminset_ignore_fields = variable_get('autotag_selectfields_'.$type, array());
-  foreach($adminset_ignore_fields as $field=>$value){
-    if($value !== 0){
-      $ignore_fields[] = $field;
-    }
-  }
   if(is_object($post_form) || is_array($post_form)){
     foreach($post_form as $key=>$value){
       if(!in_array($key, $ignore_fields)){
