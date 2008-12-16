@@ -23,6 +23,10 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
   switch($op){
     case 'update':
     case 'insert':
+      // Return if this node doesn't have any autotag vids associated with it
+      $vids = _autotag_get_vids_for_type($node->type);
+      if(!count($vids)){return;}
+      
       $all_tids = _autotag_search_node($node);
       $tids_to_ignore = explode("|",$node->hideterms);      
       // Remove the ignore ones from the add ones
@@ -48,15 +52,14 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
         }
       }
       // We've also got additional tags
-      $vids = _autotag_get_vids_for_type($node->type);
       $regexp = '%(?:^|,\ *)("(?>[^"]*)(?>""[^"]* )*"|(?: [^",]*))%x';
       preg_match_all($regexp, $node->additionaltags, $matches);
       $words = $matches[1];
-      $words_place_holders = array();
-      foreach($words as $does_not_matter){
-        $words_place_holders[] = "'%s'";
-      }
       if(count($words)){
+        $words_place_holders = array();
+        foreach($words as $does_not_matter){
+          $words_place_holders[] = "'%s'";
+        }
         $result = db_query("SELECT tid, name FROM {term_data} WHERE vid IN (%s) AND LOWER(name) IN (".implode(",",$words_place_holders).")", array_merge(array(implode(",",$vids)), $words));
         while($row = db_fetch_array($result)){
           if(!isset($terms[$row['vid']]) || !in_array($row['tid'], $terms[$row['vid']])){
