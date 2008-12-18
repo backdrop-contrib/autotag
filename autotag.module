@@ -257,7 +257,11 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
         // Check if we already have this vocab in the post
         if(isset($form['#post']['taxonomy'][$tid['vid']])){
           // Append on to the end of the array
-          $form['#post']['taxonomy'][$tid['vid']][] = $tid['tid'];
+          if(is_array($form['#post']['taxonomy'][$tid['vid']])){
+            $form['#post']['taxonomy'][$tid['vid']][] = $tid['tid'];
+          } else {
+            $form['#post']['taxonomy'][$tid['vid']] = array($form['#post']['taxonomy'][$tid['vid']] , $tid['tid']);
+          }
         } else {
           // Not set, create it
           $form['#post']['taxonomy'][$tid['vid']] = array($tid['tid']);
@@ -265,7 +269,11 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
         // Also put stuff into form_state TODO - Is this needed?
         if(isset($form_state['values']['taxonomy'][$tid['vid']])){
           // Append on to the end of the array
-          $form_state['values']['taxonomy'][$tid['vid']][] = $tid['tid'];
+          if(is_array($form_state['values']['taxonomy'][$tid['vid']])){
+            $form_state['values']['taxonomy'][$tid['vid']][] = $tid['tid'];            
+          } else {
+            $form_state['values']['taxonomy'][$tid['vid']] = array($form_state['values']['taxonomy'][$tid['vid']], $tid['tid']);            
+          }
         } else {
           // Not set, create it
           $form_state['values']['taxonomy'][$tid['vid']] = array($tid['tid']);
