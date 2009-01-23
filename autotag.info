@@ -4,4 +4,5 @@ description = "Automatically tags nodes with terms from a specified taxonomy if 
 package = "EDIT"
 dependencies[] = taxonomy
 dependencies[] = jquery_ui
+dependencies[] = lowername
 core = 6.x

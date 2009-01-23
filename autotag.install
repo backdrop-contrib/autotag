@@ -16,8 +16,8 @@ function autotag_install(){
 function autotag_schema(){
   $tables['autotag'] = array(
     'fields' => array(
-      'nid' => array('type' => 'int', 'length' => 10, 'not null' => true),
-      'tid' => array('type' => 'int', 'length' => 10, 'not null' => true)),
+      'nid' => array('type' => 'int', 'not null' => true),
+      'tid' => array('type' => 'int', 'not null' => true)),
     'primary key' => array('nid', 'tid'));
   return $tables;
 }

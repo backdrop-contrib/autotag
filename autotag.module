@@ -33,8 +33,18 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
       $terms = $node->taxonomy;
       foreach($all_tids as $tid){
         if(!in_array($tid['tid'], $tids_to_ignore)){
-          if(!isset($terms[$tid['vid']]) || !in_array($tid['tid'], $terms[$tid['vid']])){
-            $terms[$tid['vid']][] = $tid['tid'];
+          if(is_array($terms[$tid['vid']])){
+            if(!isset($terms[$tid['vid']]) || !in_array($tid['tid'], $terms[$tid['vid']])){
+              $terms[$tid['vid']][] = $tid['tid'];
+            }
+          } else {
+            // If there isn't currently anything set
+            if(trim($terms[$tid['vid']]) == ''){
+              $terms[$tid['vid']] = $tid['tid'];
+            } else {
+              // else combine
+              $terms[$tid['vid']] = array($tid['tid'], $terms[$tid['vid']]);
+            }
           }
         }
       }
@@ -43,9 +53,15 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
         if(is_numeric($tid)){
           // Remove this from $node->taxonomy
           foreach($terms as $vocab_key => $vocab_value){
-            foreach($vocab_value as $term_key => $term_value){
-              if($term_value == $tid){
-                unset($terms[$vocab_key][$term_key]);
+            if(!is_array($vocab_value)){
+              if($vocab_value == $tid){
+                unset($terms);
+              }
+            } else {
+              foreach($vocab_value as $term_key => $term_value){
+                if($term_value == $tid){
+                  unset($terms[$vocab_key][$term_key]);
+                }
               }
             }
           }
@@ -529,15 +545,32 @@ function _autotag_search_field($field, $vids){
     // Because I'm sending words as an array, I've also got to do vids in the same way
     $vids_placeholder = array();
     foreach($vids as $doesntmatter){
-      $vids_placeholder[] = "%d";
+      $vids_placeholder[] = "vid = %d";
     }
-    // Check if leftandright module is installed
     if(count($words_placeholder) && count($vids)){
-      if(function_exists('leftandright_get_tree')){
-        $results = db_query("SELECT tid, vid FROM {leftandright} WHERE lowername IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")UNION SELECT t.tid, t.vid FROM {term_data} t, {term_synonym} s WHERE s.tid = t.tid AND LOWER(s.name) IN (".implode(",",$words_placeholder).") AND vid IN (".implode(",",$vids_placeholder).")", array_merge($words,$vids,$words,$vids));
-      } else {
-        $results = db_query("SELECT t.tid, t.vid FROM {term_data} t LEFT JOIN {term_synonym} s ON s.tid = t.tid WHERE(LOWER(t.name) IN (".implode(",",$words_placeholder).") OR LOWER(s.name) IN (".implode(",",$words_placeholder).")) AND vid IN (".implode(",",$vids_placeholder).")", array_merge($words, $words, $vids));
-      }
+      // To make the following SQL command easier to read, it has been spaced!
+      $results = db_query("
+          SELECT 
+            t.tid, t.vid 
+          FROM 
+            {term_lowername} l,
+            {term_data} t 
+          WHERE 
+            t.tid = l.tid AND 
+            lowername IN (".implode(",",$words_placeholder).") AND 
+            (".implode(" OR ",$vids_placeholder).") 
+          UNION 
+          SELECT 
+            t.tid, t.vid 
+          FROM 
+            {term_data} t, 
+            {term_synonym} s 
+          WHERE 
+            s.tid = t.tid AND 
+            LOWER(s.name) IN (".implode(",",$words_placeholder).") AND 
+            (".implode(" OR ",$vids_placeholder).")",
+        array_merge($words,$vids,$words,$vids));
+        
       while($row=db_fetch_array($results)){
         $terms[] = array('tid'=>$row['tid'], 'vid'=>$row['vid']);
       }
@@ -550,32 +583,53 @@ function _autotag_search_field($field, $vids){
         if(trim($words[$i])!="" && trim($words[$i+1])!=""){
           // Now lets search for "pairs" and search on "like".  If any hit, check back on the result against
           // the original field
-          if(function_exists('leftandright_get_tree')){
-            $sql_array[] = " lowername LIKE '%s%%%s%%' ";
-            $words_array[] = $words[$i];
-            $words_array[] = $words[$i+1];
-            $sql_array_syn[] = " LOWER(name) LIKE '%s%%%s%%' ";
-            $words_array_syn[] = $words[$i];
-            $words_array_syn[] = $words[$i+1];
-          } else {
-            $sql_array[] = " LOWER(s.name) LIKE '%s%%%s%%' OR LOWER(t.name) LIKE '%s%%%s%%' ";
-            $words_array[] = $words[$i];
-            $words_array[] = $words[$i+1];
-            $words_array[] = $words[$i];
-            $words_array[] = $words[$i+1];
-          }
+          $sql_array[] = " lowername LIKE '%s%%%s%%' ";
+          $words_array[] = $words[$i];
+          $words_array[] = $words[$i+1];
+          $sql_array_syn[] = " LOWER(s.name) LIKE '%s%%%s%%' ";
+          $words_array_syn[] = $words[$i];
+          $words_array_syn[] = $words[$i+1];
         }
       }
       if(count($sql_array)){
-        // FIXME FIXME FIXME
-        if(function_exists('leftandright_get_tree')){
-          $results = db_query("SELECT tid FROM {leftandright} WHERE ".implode(" OR ",$sql_array)." UNION SELECT tid FROM {term_synonym} WHERE ".implode(" OR ",$sql_array_syn), array_merge($words_array, $words_array_syn));
-        } else {
-          $results = db_query("SELECT t.tid FROM {term_data} t LEFT JOIN {term_synonym} s ON s.tid = t.tid WHERE ".implode(" OR ",$sql_array), $words_array);
-        }
+        $results = db_query("
+            SELECT 
+              tid
+            FROM 
+              {term_lowername} l 
+            WHERE 
+              ".implode(" OR ",$sql_array)." 
+            UNION
+            SELECT 
+              tid 
+            FROM 
+              {term_synonym} s
+            WHERE 
+              ".implode(" OR ",$sql_array_syn),
+          array_merge($words_array, $words_array_syn));
+        
         while($row=db_fetch_array($results)){
           // Get the full term name, and its synonyms, and check back against the field
-          $results_2 = db_query("SELECT tid,vid,LOWER(name) AS name FROM {term_data} WHERE tid = %d UNION SELECT s.tid,vid,LOWER(s.name) AS name FROM {term_synonym} s,{term_data} t WHERE s.tid = %d AND t.tid=s.tid",$row['tid'],$row['tid']);
+          $results_2 = db_query("
+              SELECT 
+                tid, vid, LOWER(name) AS name
+              FROM 
+                {term_data}
+              WHERE 
+                tid = %d AND
+                (".implode(" OR ",$vids_placeholder).")
+              UNION
+              SELECT
+                s.tid, vid, LOWER(s.name) AS name
+              FROM 
+                {term_synonym} s,
+                {term_data} t
+              WHERE 
+                s.tid = %d AND
+                t.tid=s.tid AND 
+                (".implode(" OR ",$vids_placeholder).")",
+            array_merge(array($row['tid']),$vids,array($row['tid']),$vids));
+            
           while($row_2=db_fetch_array($results_2)){
             if(strpos(strtolower($field),$row_2['name'])!== FALSE){
               $terms[] = array('tid'=>$row_2['tid'],'vid'=>$row_2['vid']);
