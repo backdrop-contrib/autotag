@@ -30,7 +30,12 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
       $all_tids = _autotag_search_node($node);
       $tids_to_ignore = explode("|",$node->hideterms);      
       // Remove the ignore ones from the add ones
-      $terms = $node->taxonomy;
+      $terms = array();
+      if (isset($node->taxonomy)) {
+        foreach ($node->taxonomy as $term) {
+          $terms[$term->vid][] = $term->tid;
+        }
+      }      
       foreach($all_tids as $tid){
         if(!in_array($tid['tid'], $tids_to_ignore)){
           if(is_array($terms[$tid['vid']])){
@@ -102,9 +107,28 @@ function autotag_menu(){
     'access arguments' => array('create node content'),
     'type' => MENU_CALLBACK    
   );
+  $items['admin/settings/autotag'] = array(
+    'title' => 'Autotag settings',
+    'description' => 'Change the default autotag settings.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('autotag_admin_settings'),
+    'access arguments' => array('administer site configuration')
+  );
   return $items;
 }
 
+/**
+ * autotag settings page
+ */
+function autotag_admin_settings() {
+  $form['autotag_without_user_input'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('No user input required before auto tagging.'),
+    '#default_value' => variable_get('autotag_without_user_input', false),
+    '#description' => t('If checked, no user input will be required to automatically tag a node')
+  );
+  return system_settings_form($form);
+}
 /**
  * hook_form_alter is further down (in a section of its own due to its size)
  */
@@ -126,8 +150,8 @@ function autotag_submit_vocabulary_form($form, $form_values){
  */
 function autotag_form_submit($form, &$form_state){
   if(isset($form_state['storage']['formbuttons'])){
-    // After first page we store the form so that it can be restored on the 
-    // second page
+    // After first page we store the form so that it can be restored on the second
+    // page
     $form_state['storage']['formsubmitted'] = $form;
   } else {
     // Restore the hidden form fields from the old form for taxonomy
@@ -172,6 +196,9 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
     return;
   }
   
+  if(variable_get('autotag_without_user_input', 0)){
+    return;
+  }
   // If we're here, then this is a node form
   // If no vocabs are relevant to this node, simply return
   $hide_vids = _autotag_get_vids_for_type($form['type']['#value']);
@@ -179,11 +206,17 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
   
   // Autotag doesn't work with the following content types, return if this node
   // is one of these.
-  $node_types_to_ignore = variable_get("autotag_borked_content_types", variable_get('autotag_broken_node_types', array('webform', 'biblio')));
+  $node_types_to_ignore = variable_get('autotag_broken_node_types', array('webform', 'biblio'));
   if(in_array($form['type']['#value'], $node_types_to_ignore)){return;}
   
   // We're here, the form needs some changes, so lets get to it.
- 
+  
+  // If the Delete button was clicked, we need to send the user to the delete page
+  if(isset($form_state['clicked_button']['#id']) && $form_state['clicked_button']['#id'] == 'edit-delete'){
+    drupal_goto('node/'.$form['#node']->nid.'/delete');
+    return;
+  }
+  
   // If the form has NOT been submitted, we change the submit button name to
   // next, and remove submit functions from the form
   
@@ -192,7 +225,6 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
   if(!isset($form_state['storage']['oldtaxonomy'])){
     $form_state['storage']['oldtaxonomy'] = $form['taxonomy'];
   }
-  
   // Lets make sure the form is valid, we can do this by checking if there are
   // any error messages - FIXME - NOT A GOOD WAY OF DOING THIS, BUT I CAN'T
   // CURRENTLY SEE AN ALTERNATIVE
@@ -238,19 +270,15 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
       $form['buttons'] = $form_state['storage']['formbuttons'];
       $form['#submit'] = $form_state['storage']['formsubmit'];
     }
-    if(isset($form['buttons']['submit'])){
+    if(isset($form['buttons'])){
       // Our submit needs to be executed first - before node submit
-      $new_submit = array('autotag_form_submit');
-      foreach($form['buttons']['submit']['#submit'] as $submit){
-        $new_submit[] = $submit;
-      }
-      $form['buttons']['submit']['#submit'] = $new_submit;
+      $form['buttons']['submit']['#submit'] = array_merge(array('autotag_form_submit'),$form['buttons']['submit']['#submit']);
     }
     // Add the CSS and JS necesary to style the form
     jquery_ui_add(array('ui.draggable', 'ui.droppable'),'none');
     drupal_add_css(drupal_get_path('module','autotag').'/autotag.css');
     drupal_add_js(drupal_get_path('module','autotag').'/autotag.js');
-    
+
     // Add a javascript function to update the hidden field with the contents of
     // the "Terms to ignore" div
     $form['buttons']['submit']['#attributes']['onclick'] = 'autotag_update_form();';
@@ -386,13 +414,15 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
     '#default_value' => '|'
   );
   // Additional submit button higher up the page so that lazy f*&kers don't have to 
-  // scroll down.
-  
+  // scroll down.  
   if(isset($form['autotag']['dragndropfields'])){
     $form['autotag']['submit'] = $form['buttons']['submit'];
     $form['autotag']['submit']['#prefix'] = '<div class="description">'.t('Once finished reviewing the taxonomy terms, simply press save.  You may also review what you have entered below, if you feel a tag hasn\'t been found').'</div>';
     $form['autotag']['submit']['#weight'] = 1000;
   }
+  
+  // Unset the preview button, it's trouble.
+  unset($form['buttons']['preview']);
 }
 /***********************************************************************************
  * AUTOCOMPLETE FUNCTION
@@ -531,7 +561,15 @@ function _autotag_search_field($field, $vids){
     // Only search if there is text
     if(trim($field)==''){return array();}
     // Field is raw text search it for stuff
-    $words = preg_split("/[^A-Za-z0-9]+/",strtolower($field));
+    $words_including_small = preg_split("/[^A-Za-z0-9]+/",strtolower($field));
+    // lets remove the shitty small words.
+    $words = array();
+    foreach($words_including_small as $word){
+      if(strlen($word)>3){
+        $words[] = $word;
+      }
+    }
+    
     $results;
     $words_placeholder = array();
     $new_words = array();
