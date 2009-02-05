@@ -30,12 +30,7 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
       $all_tids = _autotag_search_node($node);
       $tids_to_ignore = explode("|",$node->hideterms);      
       // Remove the ignore ones from the add ones
-      $terms = array();
-      if (isset($node->taxonomy)) {
-        foreach ($node->taxonomy as $term) {
-          $terms[$term->vid][] = $term->tid;
-        }
-      }      
+      $terms = $node->taxonomy;
       foreach($all_tids as $tid){
         if(!in_array($tid['tid'], $tids_to_ignore)){
           if(is_array($terms[$tid['vid']])){
@@ -88,10 +83,23 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
           }
         }      
       }
-      taxonomy_node_save($node, $terms);
+      
+      taxonomy_node_save($node, array_unique(array_flatten(array($terms))));
       _autotag_update_table($node->nid, $tids_to_ignore);
       break;
   }
+}
+
+function array_flatten($array) {
+  $new_array = array();
+  foreach ($array as $child) {
+    if (is_array($child)) {
+      $new_array = array_merge($new_array, array_flatten($child));
+    } else {
+      $new_array[] = $child;
+    }
+  }
+  return $new_array;
 }
 
 /**
