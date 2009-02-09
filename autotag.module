@@ -93,7 +93,7 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
 function array_flatten($array) {
   $new_array = array();
   foreach ($array as $child) {
-    if (is_array($child)) {
+    if (is_array($child) || is_object($child)) {
       $new_array = array_merge($new_array, array_flatten($child));
     } else {
       $new_array[] = $child;
