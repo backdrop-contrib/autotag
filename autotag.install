@@ -6,9 +6,16 @@ function autotag_install(){
   // Create tables.
   drupal_install_schema('autotag');
   
+}
+
+function autotag_set_system_weight(){
   //Get taxonomy's weight, and increase it by ten
   $taxonomy_weight = array_pop(db_fetch_array(db_query("SELECT weight FROM {system} WHERE name='taxonomy'")));
-  db_query("UPDATE {system} SET weight=%d WHERE name='autotag'", $taxonomy_weight-1);
+  db_query("UPDATE {system} SET weight=%d WHERE name='autotag'", $taxonomy_weight+10);
+}
+
+function autotag_update_1(){
+  autotag_set_system_weight();
 }
 /**
  * Implementation of hook_schema
