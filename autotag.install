@@ -5,7 +5,7 @@
 function autotag_install(){
   // Create tables.
   drupal_install_schema('autotag');
-  
+  autotag_set_system_weight();
 }
 
 function autotag_set_system_weight(){
