@@ -5,17 +5,38 @@
 function autotag_install(){
   // Create tables.
   drupal_install_schema('autotag');
-  autotag_set_system_weight();
+  autotag_update_6101();
+  autotag_update_6102();
 }
 
-function autotag_set_system_weight(){
-  //Get taxonomy's weight, and increase it by ten
+function autotag_update_6101(){
+  $result = array();
   $taxonomy_weight = array_pop(db_fetch_array(db_query("SELECT weight FROM {system} WHERE name='taxonomy'")));
-  db_query("UPDATE {system} SET weight=%d WHERE name='autotag'", $taxonomy_weight+10);
+  $result[] = update_sql("UPDATE {system} SET weight=%d WHERE name='autotag'", $taxonomy_weight+10);
+  return $result;
 }
 
-function autotag_update_1(){
-  autotag_set_system_weight();
+function autotag_update_6102(){
+  variable_set('autotag_node_preview',variable_get('node_preview',1));
+  variable_set('node_preview',0);
+  return array('#finished' => TRUE);  
+}
+
+function autotag_update_6103(){
+  variable_set('autotag_node_preview',variable_get('node_preview',1));
+  variable_set('autotag_broken_node_types', array_unique(array_merge(
+    variable_get('autotag_broken_node_types', array('webform', 'biblio')),
+    array('image')
+  )));
+  return array('#finished' => TRUE);  
+}
+
+function autotag_update_6104(){
+  $result = array();
+  $field_group_weight = array_pop(db_fetch_array(db_query("SELECT weight+1 FROM {system} WHERE name = 'fieldgroup'")));
+  // $field_group_weight is guaranteed to be clean, so this is OK!
+  $result[] = update_sql("UPDATE {system} SET weight = $field_group_weight WHERE name = 'autotag'");
+  return $result;
 }
 /**
  * Implementation of hook_schema
@@ -34,4 +55,6 @@ function autotag_schema(){
 function autotag_uninstall(){
   // Remove tables.
   drupal_uninstall_schema('autotag');
+  variable_set('node_preview',variable_get('autotag_node_preview',1));
+  variable_del('autotag_node_preview');
 }

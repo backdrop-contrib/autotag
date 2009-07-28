@@ -6,3 +6,9 @@ dependencies[] = taxonomy
 dependencies[] = jquery_ui
 dependencies[] = lowername
 core = 6.x
+; Information added by drupal.org packaging script on 2009-02-10
+version = "6.x-1.22"
+core = "6.x"
+project = "autotag"
+datestamp = "1234258503"
+

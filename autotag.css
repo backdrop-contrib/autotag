@@ -30,3 +30,12 @@ div.autotag-dnd-drop-hover, div.autotag-dnd-drop-active{
  background-position: 50% 50%;
  background-repeat: no-repeat;
 }
+.autotag-for-the-blind{
+ font-size: 200%;
+ padding: 10px 50px;
+ color:green;
+}
+.autotag-whack-in-face{
+ font-size:140%;
+ color:green;
+}
