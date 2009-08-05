@@ -688,7 +688,7 @@ function _autotag_search_field($field, $vids){
     if(trim($field)==''){return array();}
     // Field is raw text search it for stuff
     // Thanks to http://stackoverflow.com/questions/790596/split-a-text-into-single-words
-    $words_including_small = preg_split('/[\p{P}]/', strtolower($field), -1, PREG_SPLIT_NO_EMPTY);
+    $words_including_small = preg_split('/[\p{P}\s\{\}\[\]\(\)]/', strtolower($field), -1, PREG_SPLIT_NO_EMPTY);
     // lets remove the shitty small words.
     $words = array();
     foreach($words_including_small as $word){
