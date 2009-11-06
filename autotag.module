@@ -185,20 +185,22 @@ function autotag_form_submit($form, &$form_state){
     // page
     $form_state['storage']['formsubmitted'] = $form;
   } else {
-    foreach($form_state['clicked_button']['#post']['files'] as $key => $value){
-      // If we have a node, then the files may already be associated.
-      $fids_to_ignore = array();
-      if(isset($form['#node']->nid)){
-        // Lets get a list of the FIDs that are already in the upload table
-        $results = db_query("SELECT DISTINCT fid FROM upload WHERE nid = %d", $form['#node']->nid);
-        while($row = db_fetch_array($results)){
-          $fids_to_ignore[$row['fid']] = $row['fid'];
+    if(isset($form_state['clicked_button']['#post']['files'])){
+      foreach($form_state['clicked_button']['#post']['files'] as $key => $value){
+        // If we have a node, then the files may already be associated.
+        $fids_to_ignore = array();
+        if(isset($form['#node']->nid)){
+          // Lets get a list of the FIDs that are already in the upload table
+          $results = db_query("SELECT DISTINCT fid FROM upload WHERE nid = %d", $form['#node']->nid);
+          while($row = db_fetch_array($results)){
+            $fids_to_ignore[$row['fid']] = $row['fid'];
+          }
         }
-      }
-      if(!isset($fids_to_ignore[$key])){
-        $form_state['values']['files'][$key] = db_fetch_array(db_query("SELECT * FROM files WHERE fid = %d", $key));
-        $form_state['values']['files'][$key]['new'] = 1;
-        $form_state['values']['files'][$key]['list'] = 1;
+        if(!isset($fids_to_ignore[$key])){
+          $form_state['values']['files'][$key] = db_fetch_array(db_query("SELECT * FROM files WHERE fid = %d", $key));
+          $form_state['values']['files'][$key]['new'] = 1;
+          $form_state['values']['files'][$key]['list'] = 1;
+        }
       }
     }
     
@@ -236,7 +238,7 @@ function autotag_restore_form_values($form, $value){
 // Recursive function called by the above function.
 function _autotag_form_set_from_array(&$form, $form_state){
   foreach($form_state as $key => $value){
-    if(isset($form[$key])){
+    if(isset($form[$key]) && is_array($form[$key])){
       if(is_array($value)  && !isset($form[$key]['#default_value'])){
         _autotag_form_set_from_array($form[$key], $value);
       } else {
@@ -687,26 +689,22 @@ function _autotag_search_field($field, $vids){
     // Only search if there is text
     if(trim($field)==''){return array();}
     // Field is raw text search it for stuff
+    /**
+     * Discovered that the following only seems to work in PHP 5.2, FARP!
     // Thanks to http://stackoverflow.com/questions/790596/split-a-text-into-single-words
     $words_including_small = preg_split('/[\p{P}\s\{\}\[\]\(\)]/', strtolower($field), -1, PREG_SPLIT_NO_EMPTY);
+     */
+    
+    $words_including_small = preg_split('/[\ `!"£$%^&*()_\-+={\[}\]:;@\'~#<,>.?\/|\\\]/', strtolower($field), -1, PREG_SPLIT_NO_EMPTY);
     // lets remove the shitty small words.
     $words = array();
-    foreach($words_including_small as $word){
-      if(strlen($word)>3){
-        $words[] = $word;
-      }
-    }
-    
-    $results;
     $words_placeholder = array();
-    $new_words = array();
-    foreach($words as $word){
-      if(trim($word)!=''){
+    foreach($words_including_small as $key => $word){
+      if(strlen(trim($word))>3){
+        $words[$key] = $word;
         $words_placeholder[] = "'%s'";
-        $new_words[] = $word;
       }
     }
-    $words = $new_words;
     // Because I'm sending words as an array, I've also got to do vids in the same way
     $vids_placeholder = array();
     foreach($vids as $doesntmatter){
@@ -744,16 +742,16 @@ function _autotag_search_field($field, $vids){
       $sql_array_syn = array();
       $words_array = array();
       $words_array_syn = array();
-      for($i=0;$i<$total_words-1;$i++){
-        if(trim($words[$i])!="" && trim($words[$i+1])!=""){
+      foreach($words as $key => $word){
+        if(isset($words_including_small[$key+1])){
           // Now lets search for "pairs" and search on "like".  If any hit, check back on the result against
           // the original field
           $sql_array[] = " lowername LIKE '%s%%%s%%' ";
-          $words_array[] = $words[$i];
-          $words_array[] = $words[$i+1];
+          $words_array[] = $word;
+          $words_array[] = $words_including_small[$key+1];
           $sql_array_syn[] = " LOWER(s.name) LIKE '%s%%%s%%' ";
-          $words_array_syn[] = $words[$i];
-          $words_array_syn[] = $words[$i+1];
+          $words_array_syn[] = $word;
+          $words_array_syn[] = $words_including_small[$key+1];
         }
       }
       if(count($sql_array)){
