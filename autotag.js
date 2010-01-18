@@ -44,6 +44,9 @@ $(document).ready(function () {
       ui.draggable.appendTo($(this).parent());
     }
   });
+  $('#autotag_remove_all').bind('click', function (){
+    $('#autotag-dnd-left>ul>li').appendTo("#autotag-dnd-right>ul")
+  });
 });
 function autotag_update_form(){
   var hidden_tids = '';

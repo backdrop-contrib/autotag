@@ -5,8 +5,10 @@
 function autotag_install(){
   // Create tables.
   drupal_install_schema('autotag');
-  autotag_update_6101();
+  // Autotag needs to be heavier than fieldgroup and taxonomy (9 & 0)
+  $result[] = db_query("UPDATE {system} SET weight=10 WHERE name='autotag'");
   autotag_update_6102();
+  
 }
 
 function autotag_update_6101(){
@@ -38,6 +40,27 @@ function autotag_update_6104(){
   $result[] = update_sql("UPDATE {system} SET weight = $field_group_weight WHERE name = 'autotag'");
   return $result;
 }
+
+function autotag_update_6105(){
+  // 6103 has failed due to code in the nexus.install file which didn't mention
+  // the image module.
+  variable_set('autotag_broken_node_types', array_unique(array_merge(variable_get('autotag_broken_node_types', array()), array('biblio','image','webform'))));
+  return array('#finished' => TRUE);  
+}
+
+function autotag_update_6106(){
+  // Set weight as 10 (more than fieldgroup and taxonomy).
+  $result[] = db_query("UPDATE {system} SET weight=10 WHERE name='autotag'");
+  return array('#finished' => TRUE);
+}
+
+/**
+ * Update the menu.
+ */
+function autotag_update_6107(){
+  return array('#finished' => TRUE);
+}
+
 /**
  * Implementation of hook_schema
  */

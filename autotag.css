@@ -39,3 +39,9 @@ div.autotag-dnd-drop-hover, div.autotag-dnd-drop-active{
  font-size:140%;
  color:green;
 }
+#autotag_remove_all{
+ float:right;
+}
+#autotag_remove_all:hover{
+ cursor:pointer
+}

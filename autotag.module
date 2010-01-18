@@ -10,119 +10,102 @@
  * number of nodes to search on cron.  Once all nodes have been search by cron,
  * this module shouldn't do anything on a cron run.
  */
-/*******************************************************************************
- * HOOKS
- ******************************************************************************/
+
 /**
- * Implementation of hook_nodeapi
- * 
- * This saves the hidden terms in the database.  This is done here, as the nid
- * may not be known on submit (if the node is new).
+ * Implementation of hook_node_operations
  */
-function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
-  // This is completely broken with some node types
-  if(in_array($node->type, variable_get('autotag_totally_borked', array()))){
-    return;
+function autotag_node_operations(){
+  return array(
+    'autotag' => array(
+      'label' => t('Automatically tag'),
+      'callback' => 'autotag_mass_update'
+    )
+  );
+}
+
+/**
+ * Callback for node_operation to re-autotag nodes.
+ */
+function autotag_mass_update($nodes){
+  // Following ripped off from nodes module.
+  // We use batch processing to prevent timeout when updating a large number
+  // of nodes.
+  if (count($nodes) > 10) {
+    $batch = array(
+      'operations' => array(
+        array('_autotag_mass_update_batch_process', array($nodes))
+      ),
+      'finished' => '_autotag_mass_update_batch_finished',
+      'title' => t('Processing'),
+      // We use a single multi-pass operation, so the default
+      // 'Remaining x of y operations' message will be confusing here.
+      'progress_message' => '',
+      'error_message' => t('The update has encountered an error.')
+    );
+    batch_set($batch);
   }
-  switch($op){
-    case 'update':
-    case 'insert':
-      // Return if this node doesn't have any autotag vids associated with it
-      $vids = _autotag_get_vids_for_type($node->type);
-      if(!count($vids)){return;}
-      
-      $all_tids = _autotag_search_node($node);
-      $tids_to_ignore = explode("|",$node->hideterms);      
-      // Remove the ignore ones from the add ones
-      if(!isset($node->taxonomy)){
-        $terms = array();
-      } else {
-        $terms = $node->taxonomy;
-      }
-      // Check to see whether or not we have objects
-      $terms_are_objects = false;
-      foreach($terms as $term){
-        if(is_object($term)){
-          $terms_are_objects = true;
-        }
-        break;
-      }
-      foreach($all_tids as $tid){
-        if($terms_are_objects){
-          $terms[$tid['tid']] = taxonomy_get_term($tid['tid']);
-        } else {
-          if(!in_array($tid['tid'], $tids_to_ignore)){
-            if(is_array($terms[$tid['vid']])){
-              if(!isset($terms[$tid['vid']]) || !in_array($tid['tid'], $terms[$tid['vid']])){
-                $terms[$tid['vid']][] = $tid['tid'];
-              }
-            } else {
-              // If there isn't currently anything set
-              if(is_string($terms[$tid['vid']]) && trim($terms[$tid['vid']]) == ''){
-                $terms[$tid['vid']] = $tid['tid'];
-              } else {
-                // else combine
-                $terms[$tid['vid']] = array($tid['tid'], $terms[$tid['vid']]);
-              }
-            }
-          }
-        }
-      }
-      // Remove the ignore ones, from terms already associated with the node
-      foreach($tids_to_ignore as $tid){
-        if(is_numeric($tid)){
-          // Remove this from $node->taxonomy
-          foreach($terms as $vocab_key => $vocab_value){
-            if(!is_array($vocab_value)){
-              if($vocab_value == $tid){
-                unset($terms);
-              }
-            } else {
-              foreach($vocab_value as $term_key => $term_value){
-                if($term_value == $tid){
-                  unset($terms[$vocab_key][$term_key]);
-                }
-              }
-            }
-          }
-        }
-      }
-      // We've also got additional tags
-      $regexp = '%(?:^|,\ *)("(?>[^"]*)(?>""[^"]* )*"|(?: [^",]*))%x';
-      preg_match_all($regexp, $node->additionaltags, $matches);
-      $words = $matches[1];
-      if(count($words)){
-        $words_place_holders = array();
-        foreach($words as $does_not_matter){
-          $words_place_holders[] = "'%s'";
-        }
-        $result = db_query("SELECT tid, name FROM {term_data} WHERE vid IN (%s) AND LOWER(name) IN (".implode(",",$words_place_holders).")", array_merge(array(implode(",",$vids)), $words));
-        while($row = db_fetch_array($result)){
-          if(!isset($terms[$row['vid']]) || !in_array($row['tid'], $terms[$row['vid']])){
-            $terms[$row['vid']][] = $row['tid'];
-          }
-        }      
-      }
-      if($terms_are_objects){
-        taxonomy_node_save($node, array_keys($terms));
-      } else {
-        taxonomy_node_save($node, array_unique(array_flatten(array($terms))));
-      }
-      _autotag_update_table($node->nid, $tids_to_ignore);
-      break;
+  else {
+    foreach($nodes as $nid){
+      _autotag_mass_update_helper($nid);
+    }
+    drupal_set_message(t('The update has been performed.'));
   }
 }
 
-function array_flatten($array) {
-  $new_array = array();
-  foreach ($array as $child) {
-    if (is_array($child) || is_object($child)) {
-      $new_array = array_merge($new_array, array_flatten($child));
-    } else {
-      $new_array[] = $child;
-    }
+/**
+ * Node Mass Update Batch operation
+ */
+function _autotag_mass_update_batch_process($nodes, $updates, &$context) {
+  if (!isset($context['sandbox']['progress'])) {
+    $context['sandbox']['progress'] = 0;
+    $context['sandbox']['max'] = count($nodes);
+    $context['sandbox']['nodes'] = $nodes;
   }
-  return $new_array;
+
+  // Process nodes by groups of 5.
+  $count = min(5, count($context['sandbox']['nodes']));
+  for ($i = 1; $i <= $count; $i++) {
+    // For each nid, load the node, reset the values, and save it.
+    $nid = array_shift($context['sandbox']['nodes']);
+    _autotag_mass_update_helper($nid);
+    
+    // Update our progress information.
+    $context['sandbox']['progress']++;
+  }
+
+  // Inform the batch engine that we are not finished,
+  // and provide an estimation of the completion level we reached.
+  if ($context['sandbox']['progress'] != $context['sandbox']['max']) {
+    $context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
+  }
+}
+
+/**
+ * Node Mass Update Batch 'finished' callback.
+ */
+function _autotag_mass_update_batch_finished($success, $results, $operations) {
+  if ($success) {
+    drupal_set_message(t('The update has been performed.'));
+  }
+  else {
+    drupal_set_message(t('An error occurred and processing did not complete.'), 'error');
+  }
+}
+
+/**
+ * Helper function for above.
+ */
+function _autotag_mass_update_helper($nid){
+  $node = node_load(array('nid' => $nid));
+  node_save($node);
+}
+
+/**
+ * Implementation of hook_nodeapi
+ */
+function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
+  module_load_include('functions.inc','autotag');
+  _autotag_nodeapi($node, $op, $a3, $a4);
 }
 
 /**
@@ -131,41 +114,25 @@ function array_flatten($array) {
  * Needed only for the module's settings page, and the autocomplete function
  */
 function autotag_menu(){
-  $items = array();
-  $items['autotag/autocomplete'] = array(
-    'title' => 'Autocomplete autotag thingumy',
-    'page callback' => 'autotag_autocomplete',
-    'access arguments' => array('access content'),// Hmmm, not ideal!
-    'type' => MENU_CALLBACK    
+  return array(
+    'autotag/autocomplete' => array(
+      'title' => 'Autocomplete autotag thingumy',
+      'page callback' => 'autotag_autocomplete',
+      'access arguments' => array('access content'),// Hmmm, not ideal!
+      'type' => MENU_CALLBACK,
+      'file' => 'autotag.autocomplete.inc'
+    ),
+    'admin/settings/autotag' => array(
+      'title' => 'Autotag settings',
+      'description' => 'Change the default autotag settings.',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('autotag_admin_settings'),
+      'access arguments' => array('administer site configuration'),
+      'file' => 'autotag.settings.inc'
+    )
   );
-  $items['admin/settings/autotag'] = array(
-    'title' => 'Autotag settings',
-    'description' => 'Change the default autotag settings.',
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('autotag_admin_settings'),
-    'access arguments' => array('administer site configuration')
-  );
-  return $items;
 }
 
-/**
- * autotag settings page
- */
-function autotag_admin_settings() {
-  $form['autotag_without_user_input'] = array(
-    '#type' => 'checkbox',
-    '#title' => t('No user input required before auto tagging.'),
-    '#default_value' => variable_get('autotag_without_user_input', false),
-    '#description' => t('If checked, no user input will be required to automatically tag a node')
-  );
-  return system_settings_form($form);
-}
-/**
- * hook_form_alter is further down (in a section of its own due to its size)
- */
-/*******************************************************************************
- * FORM SUBMIT
- ******************************************************************************/
 /**
  * Simply save what was entered in the checkbox
  */
@@ -205,6 +172,7 @@ function autotag_form_submit($form, &$form_state){
     }
     
     // Restore the hidden form fields from the old form for taxonomy
+    module_load_include('functions.inc','autotag');
     $hide_vids = _autotag_get_vids_for_type($form['type']['#value']);
     foreach($form['taxonomy'] as $key=>$value){
       if(in_array($key,$hide_vids)){
@@ -215,656 +183,11 @@ function autotag_form_submit($form, &$form_state){
     unset($form_state['storage']['oldtaxonomy']);
   }
 }
-
-/**
- * Look through the form for some shit!
- */
-function autotag_restore_form_values($form, $value){
-  foreach($form as $key => $form_part){
-    if(is_array($form_part)){
-      if($key == $value['key'] && ((isset($form_part['#type']) && $form_part['#type'] != 'fieldset') || is_array($value['value']))){
-        if(is_array($value['value'])){
-          _autotag_form_set_from_array($form_part, $value['value']);
-        } else {
-          $form[$key]['#default_value'] = $value['value'];
-        }
-      } else {
-        $form[$key] = autotag_restore_form_values($form_part, $value);
-      }
-    }
-  }
-  return $form;
-}
-// Recursive function called by the above function.
-function _autotag_form_set_from_array(&$form, $form_state){
-  foreach($form_state as $key => $value){
-    if(isset($form[$key]) && is_array($form[$key])){
-      if(is_array($value)  && !isset($form[$key]['#default_value'])){
-        _autotag_form_set_from_array($form[$key], $value);
-      } else {
-        $form[$key]['#default_value'] = $value;
-      }
-    }
-  }
-}
-/*******************************************************************************
- * FORM ALTER
- ******************************************************************************/
 /**
  * Implementation of hook_form_alter
- * 
- * Changes the form so that it takes place over multiple pages, adding the
- * necesary fields to do that.
  */
 function autotag_form_alter(&$form, &$form_state, $form_id){
-  // If this is not a node form, check if it is the taxonomy vocabulary form.
-  // If so, add stuff to it.
-  if($form['#id'] != 'node-form'){
-    // check if this is the vocabulary edit form, if so, we want to add a 
-    // checkbox to give users the option to ignore autotag
-    if($form['#id'] == 'taxonomy-form-vocabulary' && $form['module']['#value']=='taxonomy'){
-      // Here we can add the extra field
-      $disable_vids = variable_get('autotag_disable_vids', array());
-      $form['settings']['disableautotag'] = array(
-        '#type' => 'checkbox',
-        '#title' => t('Disable Autotag'),
-        '#default_value' => isset($disable_vids[$form['vid']['#value']]) ? $disable_vids[$form['vid']['#value']] : 0,  
-        '#description' => t('If checked, this Vocabulary will not be used by the Autotagger (Vocabularies that are marked as "Multiple Select" and are NOT marked as "Tags" or "Required" will use autotagger)')
-      );
-      // Finally we need a submit function
-      $form['#submit'][] = 'autotag_submit_vocabulary_form';
-    } else if ($form_id == 'node_configure'){
-      $form['node_preview']['#disabled'] = TRUE;
-      $form['node_preview']['#default_value'] = 0;
-      $form['node_preview']['#description'] .= ' <span class="error">' . t('This option has been disabled due to a conflict with the Autotag module').'</span>';
-    }
-    return;
-  }
-  if(variable_get('autotag_without_user_input', 0)){
-    return;
-  }
-  // If we're here, then this is a node form
-  // If no vocabs are relevant to this node, simply return
-  $hide_vids = _autotag_get_vids_for_type($form['type']['#value']);
-  if(!count($hide_vids)){return;}
-  
-  // Also check for if we're being called by the node_import module, as if we
-  // are, we need to return
-  if(strpos($_GET['q'], 'admin/content/node_import') !== FALSE){ return; }
-  
-  // Autotag doesn't work with the following content types, return if this node
-  // is one of these.
-  $node_types_to_ignore = variable_get('autotag_broken_node_types', array('webform', 'biblio', 'image'));
-  if(in_array($form['type']['#value'], $node_types_to_ignore)){
-    if(in_array($form['type']['#value'], variable_get('autotag_totally_borked', array()))){
-      return;
-    }
-    drupal_set_message(t('The term selection interface provided by the Autotag module does not work with the <b>@type</b> content type. Nodes will still be automatically tagged, but without the option to remove unwanted tags.', array('@type' => $form['type']['#value'])));
-    return;
-  }
-  
-  // We're here, the form needs some changes, so lets get to it.
-  
-  // If the Delete button was clicked, we need to send the user to the delete page
-  if(isset($form_state['clicked_button']['#id']) && $form_state['clicked_button']['#id'] == 'edit-delete'){
-    drupal_goto('node/'.$form['#node']->nid.'/delete');
-    return;
-  }
-  
-  // If the form has NOT been submitted, we change the submit button name to
-  // next, and remove submit functions from the form
-  
-  // Firstly, we check to see if the oldtaxonomy is in storage, if not, we put
-  // it there.
-  if(!isset($form_state['storage']['oldtaxonomy'])){
-    $form_state['storage']['oldtaxonomy'] = $form['taxonomy'];
-  }
-  // Lets make sure the form is valid, we can do this by checking if there are
-  // any error messages - FIXME - NOT A GOOD WAY OF DOING THIS, BUT I CAN'T
-  // CURRENTLY SEE AN ALTERNATIVE
-  // <rant>Why can't form state store the valid status of a form?</rant>
-  $form_is_valid = !count(drupal_get_messages('error',FALSE));
-  if((!$form_state['submitted'] && !$form_state['post']) || !$form_is_valid){
-    // Hide the taxonomy fields -> this can greatly improve the rendering time 
-    // for a page with a large classification on it.  We do this on all pages
-    if(!$form_is_valid){
-      // The form isn't valid, we need to restore the values that the user had
-      // entered to the form.
-      foreach($form_state['values'] as $key => $value){
-        // We need to walk the $form variable for each key, and set the 
-        // #default_value to be $value.
-        $form = autotag_restore_form_values($form, array('key' => $key, 'value' => $value));
-      }
-    }
-    foreach($form['taxonomy'] as $key=>$value){
-      if(in_array($key,$hide_vids)){
-        unset($form['taxonomy'][$key]);
-      }
-    }
-    // Hide the taxonomy fieldset if there is nothing left in it.
-    $taxonomy_keys = array_keys($form['taxonomy']);
-    $unset = true;
-    foreach($taxonomy_keys as $key){
-      if(substr($key, 0, 1)!='#'){
-        $unset = false;
-      }
-    }
-    if($unset){
-      // Leave it hidden (not sure why), rather than unset-ing
-      $form['taxonomy']['#type'] = 'hidden';
-    }
-    
-    // Store the stubmit for use later
-    $form_state['storage']['formbuttons'] = $form['buttons'];
-    $form_state['storage']['formsubmit'] = $form['#submit']; 
-    
-    // Change the button so that it says "Next"
-    $form['buttons']['submit']['#value'] = t('Next');
-    // Change what will happen when we submit the form (remove the other 
-    // submits)
-    $form['buttons']['submit']['#submit'] = array('autotag_form_submit');
-    $form['#submit'] = array();
-  
-    // Add 'upload_node_form_submit' - it's special!!
-    /*
-    $key = array_search('upload_node_form_submit', $form_state['storage']['formsubmit']);
-    if($key){
-      $form['#submit'][] = 'upload_node_form_submit';
-    }
-    $key = array_search('upload_node_form_submit', $form_state['storage']['formbuttons']['submit']['#submit']);
-    if($key){
-      $form['buttons']['submit']['#submit'] = array('upload_node_form_submit','autotag_form_submit');
-    }
-    */
-  } else {
-    // Else we likely have either a submitted form, or one with post shit
-    if(count($form_state['storage']['formsubmitted'])){
-      // Restore the values to the form from t' previous page.
-      $form = $form_state['storage']['formsubmitted'];
-      unset($form_state['storage']['formsubmitted']);
-      $form['buttons'] = $form_state['storage']['formbuttons'];
-      $form['#submit'] = $form_state['storage']['formsubmit'];
-    }
-    if(isset($form['buttons'])){
-      // Our submit needs to be executed first - before node submit
-      $form['buttons']['submit']['#submit'] = array_merge(array('autotag_form_submit'),$form['buttons']['submit']['#submit']);
-    }
-    // Remove 'upload_node_form_submit'
-    $key = array_search('upload_node_form_submit', $form['#submit']);
-    if($key){
-      unset($form['#submit'][$key]);
-    }
-    $key = array_search('upload_node_form_submit', $form['buttons']['submit']['#submit']);
-    if($key){
-      unset($form['buttons']['submit']['#submit'][$key]);
-    }
-    
-    // Add the CSS and JS necesary to style the form
-    jquery_ui_add(array('ui.draggable', 'ui.droppable'),'none');
-    drupal_add_css(drupal_get_path('module','autotag').'/autotag.css');
-    drupal_add_js(drupal_get_path('module','autotag').'/autotag.js');
-
-    // Add a javascript function to update the hidden field with the contents of
-    // the "Terms to ignore" div
-    $form['buttons']['submit']['#attributes']['onclick'] = 'autotag_update_form();';
-
-    // Search the text of the form, and update the taxonomy accordingly
-    if(isset($form_state['values'])){
-      $tids = _autotag_search_post($form_state['values']);
-      // Also put the old terms in there
-      if(is_array($form_state['storage']['oldtaxonomy'])){
-        foreach($form_state['storage']['oldtaxonomy'] as $vid => $form_array){
-          if(is_array($form_array['#default_value'])){
-            foreach($form_array['#default_value'] as $tid){
-              $tids[] = array('tid' => $tid, 'vid' => $vid);
-            }
-          }
-        }
-      }      
-      // Add the tids to the form['#post'] dodah
-      foreach($tids as $tid){
-        // Check if we already have this vocab in the post
-        if(isset($form['#post']['taxonomy'][$tid['vid']])){
-          // Append on to the end of the array
-          if(is_array($form['#post']['taxonomy'][$tid['vid']])){
-            $form['#post']['taxonomy'][$tid['vid']][] = $tid['tid'];
-          } else {
-            $form['#post']['taxonomy'][$tid['vid']] = array($form['#post']['taxonomy'][$tid['vid']] , $tid['tid']);
-          }
-        } else {
-          // Not set, create it
-          $form['#post']['taxonomy'][$tid['vid']] = array($tid['tid']);
-        }
-        // Also put stuff into form_state TODO - Is this needed?
-        if(isset($form_state['values']['taxonomy'][$tid['vid']])){
-          // Append on to the end of the array
-          if(is_array($form_state['values']['taxonomy'][$tid['vid']])){
-            $form_state['values']['taxonomy'][$tid['vid']][] = $tid['tid'];            
-          } else {
-            $form_state['values']['taxonomy'][$tid['vid']] = array($form_state['values']['taxonomy'][$tid['vid']], $tid['tid']);            
-          }
-        } else {
-          // Not set, create it
-          $form_state['values']['taxonomy'][$tid['vid']] = array($tid['tid']);
-        }
-      }
-    }
-    // Keep stuff as it is, just add the autotag bollocks to the top      
-    $form['autotag']['#type'] = 'fieldset';
-    $form['autotag']['#title'] = t('Discovered tags');
-    $form['autotag']['#collapsed'] = true;
-    $form['autotag']['#collapsible'] = false;
-    $form['autotag']['#weight'] = -100;
-    $form['autotag']['description'] = array(
-      '#value' => '<p class="messages autotag-whack-in-face">'.t('Review the terms below, and then "Save"').'</p><p class="description">'.t('The terms in the "Terms to tag" box were found in your text. Drag \'n\' drop the terms from the "Terms to tag" box to the "Terms to ignore" box if you don\'t want this page/node to be tagged with that term') .'</p>',
-      '#weight' => -1000
-    );
-    $form['autotag']['ignoreterms'] = array(
-      '#type' => 'hidden'
-    );
-    // Build the ignore and tag lists
-    $lists = '';
-    $ignore_list = '';
-    $vocabularies = taxonomy_get_vocabularies();      
-    if(isset($form['#node']->nid)){
-      $ignore_terms = _autotag_get_ignore_terms($form['#node']->nid);
-    } else {
-      $ignore_terms = array();
-    }
-    $add_terms = array();
-    if(is_array($form['#post']['taxonomy'])){
-      foreach($form['#post']['taxonomy'] as $key => $terms){
-        if(in_array($key, $hide_vids)){
-          $place_holders = array();
-          if(is_array($terms)){
-            foreach($terms as $doesntmatter){
-              $place_holders[] = '%d';
-            }
-          } else {
-            $place_holders[] = '%d';
-            $terms = array($terms);
-          }
-          if(count($place_holders)){
-            $results = db_query("SELECT * FROM {term_data} WHERE tid IN (".implode(',',$place_holders).") ORDER BY name", $terms);
-            while($term=db_fetch_object($results)){
-              $add_terms[] = $term;
-              if(!in_array($term,$ignore_terms)){
-                $lists .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
-              }
-            }
-          }
-        }
-      }
-    }  
-    foreach($ignore_terms as $term){
-      if(in_array($term, $add_terms)){
-        $ignore_list .= '<li class="autotag-dragable" tid="'.$term->tid.'">'.check_plain($term->name).' ('.check_plain($vocabularies[$term->vid]->name).')</li>';
-      }
-    }
-    // HTML shit for drag'n'droping
-    $form['autotag']['dragndropfields'] = array(
-      '#value' => '<div class="autotag-dnd" id="autotag-container">
-  <div id="autotag-dnd-left">
-    <h3>'.t('Terms to use').'</h3>
-    <ul>
-      '.$lists.'
-    </ul>
-  </div>
-  <div id="autotag-dnd-right">
-    <h3>'.t('Terms to ignore').'</h3>
-    <ul>
-      '.$ignore_list.'
-    </ul>
-  </div> 
-</div>');
-      
-    // Add an additional autocomplete field for adding any additional tags to
-    // the classification
-    $vocabs = _autotag_get_vids_for_type($form['type']['#value'], FALSE);
-    $vocabs_string = '';
-    $concater = '';
-    foreach($vocabs as $vocab){
-      $vocabs_string .= $concater.' '.check_plain($vocab->name);
-      $concater = ';';
-    }
-    $form['autotag']['additionaltags'] = array(
-      '#type' => 'textfield',
-      '#title' => t('Additional terms to tag this node with'),
-      '#description' => t('Terms can be selected from (multiple terms seperated by a comma):').$vocabs_string,
-      '#autocomplete_path' => 'autotag/autocomplete/'.$form['type']['#value']
-    );
-  }
-  
-  // Add a hidden field for recording the location of ignore and add terms in
-  // the drag'n'drop interface.
-  $form['autotag']['hideterms'] = array(
-    '#type' => 'hidden',
-    '#default_value' => '|'
-  );
-  // Additional submit button higher up the page so that lazy f*&kers don't have to 
-  // scroll down.  
-  if(isset($form['autotag']['dragndropfields'])){
-    $form['autotag']['submit'] = $form['buttons']['submit'];
-    $form['autotag']['submit']['#attributes']['class'] = 'autotag-for-the-blind';
-    $form['autotag']['submit']['#weight'] = 1000;
-  }
-  
-  // Unset the preview button, it's trouble.
-  unset($form['buttons']['preview']);
-}
-/***********************************************************************************
- * AUTOCOMPLETE FUNCTION
- ***********************************************************************************/
-function autotag_autocomplete($type = 'page', $string=''){
-  $vids = _autotag_get_vids_for_type($type);
-  /**
-   * The following is taken straight from the taxonomy module, with a small alteration to the SQL
-   */
-  $regexp = '%(?:^|,\ *)("(?>[^"]*)(?>""[^"]* )*"|(?: [^",]*))%x';
-  preg_match_all($regexp, $string, $matches);
-  $array = $matches[1];
-  
-  // Fetch last tag
-  $matches = array();
-  $last_string = trim(array_pop($array));
-  if ($last_string != '') {
-    $result = db_query_range(db_rewrite_sql("SELECT t.tid, t.name FROM {term_data} t WHERE t.vid IN (%s) AND LOWER(t.name) LIKE LOWER('%s%%')", 't', 'tid'), implode(",",$vids), $last_string, 0, 10);
-  
-    $prefix = count($array) ? implode(', ', $array) .', ' : '';
-  
-    while ($tag = db_fetch_object($result)) {
-      $n = $tag->name;
-      // Commas and quotes in terms are special cases, so encode 'em.
-      if (strpos($tag->name, ',') !== FALSE || strpos($tag->name, '"') !== FALSE) {
-        $n = '"'. str_replace('"', '""', $tag->name) .'"';
-      }
-      $matches[$prefix . $n] = check_plain($tag->name);
-    }
-  }
-  print drupal_to_js($matches);
-  exit();
-}
-/***********************************************************************************
- * PRIVATE/HELPER FUNCTIONS
- ***********************************************************************************/
-/**
- * Return an array of vids which apply to a specific node type
- */
-function _autotag_get_vids_for_type($type, $just_vids = TRUE){
-  $vocabularies = taxonomy_get_vocabularies();
-  $vids = array();
-  $disable_vids = variable_get('autotag_disable_vids', array());
-  foreach($vocabularies as $vocabulary){
-    if(in_array($type,$vocabulary->nodes) && 
-       $vocabulary->tags == 0 &&
-       $vocabulary->required == 0 &&
-       $vocabulary->multiple == 1 &&
-       $vocabulary->module == 'taxonomy' &&
-       (
-         !isset($disable_vids[$vocabulary->vid]) ||
-         (
-           isset($disable_vids[$vocabulary->vid]) &&
-           !$disable_vids[$vocabulary->vid]
-         )
-       )){
-      if($just_vids){
-        $vids[] = $vocabulary->vid;
-      } else {
-        $vids[] = $vocabulary;
-      }
-    }
-  }
-  return $vids;
-}
-
-/**
- * Following function takes the posted shit in a form, and searches it. EASY!
- */
-function _autotag_search_post($values){
-  $vids = _autotag_get_vids_for_type($values['type']);
-  $fields = _autotag_fields_to_search_post($values, $values['type']);
-  $terms_to_return = array();
-  foreach($fields as $field){
-    // Lets split the fields up by spaces, and search on each word in the term_data table.
-    if(isset($values[$field])){
-      $terms = _autotag_search_field($values[$field], $vids);
-      if(count($terms)){
-        $terms_to_return = array_merge($terms_to_return, $terms);
-      }
-    }
-  }
-  return $terms_to_return;
-}
-/**
- * Following function gets the terms from the database, and does the tagging
- * 
- * This takes a node as a parameter, and returns the additional terms that the
- * node should be tagged with.
- */
-function _autotag_search_node($node){
-  // First get all vocabularies, and see which ones apply to this content type
-  $vids = _autotag_get_vids_for_type($node->type);
-  // Get all the fields to search from this node  
-  $fields = _autotag_fields_to_search($node);
-  $terms_to_return = array();
-  foreach($fields as $field){
-    // Lets split the fields up by spaces, and search on each word in the term_data table.
-    if(isset($node->$field)){
-      $terms_to_return = array_merge($terms_to_return, _autotag_search_field($node->$field, $vids));
-      /*      foreach($terms as $term){
-        
-        $node->taxonomy[$term['vid']][$term['tid']] = $term['tid'];
-      }*/
-    }
-  }
-  return $terms_to_return;
-}
-/**
- * Takes a field and term and checks for a match.  Field can be an array, or
- * a single string.  If an array, it recurses till it gets a string
- * 
- * Search algorithm:
- * 
- * Split field into words
- * foreach word
- *   does the word match any terms (relevant to this node type)
- *     yes:add the term id to the list
- *     no:continue
- * foreach word
- *   does the word combined with the word after it look like any terms (...)
- *     get the full term (which could be more than two words)
- *     does the full term match anywhere in the field
- *       yes:add the term id to the list
- *       no:continue
- */
-function _autotag_search_field($field, $vids){
-  $terms=array();
-  if(is_array($field) || is_object($field)){
-    // Field is an array (and likely to be an array of arrays).  Lets
-    // recurse into it and check away
-    foreach($field as $field_part=>$value){
-      $terms = array_merge($terms,_autotag_search_field($value, $vids));
-    }
-  } else {
-    // Only search if there is text
-    if(trim($field)==''){return array();}
-    // Field is raw text search it for stuff
-    /**
-     * Discovered that the following only seems to work in PHP 5.2, FARP!
-    // Thanks to http://stackoverflow.com/questions/790596/split-a-text-into-single-words
-    $words_including_small = preg_split('/[\p{P}\s\{\}\[\]\(\)]/', strtolower($field), -1, PREG_SPLIT_NO_EMPTY);
-     */
-    
-    $words_including_small = preg_split('/[\ `!"£$%^&*()_\-+={\[}\]:;@\'~#<,>.?\/|\\\]/', strtolower($field), -1, PREG_SPLIT_NO_EMPTY);
-    // lets remove the shitty small words.
-    $words = array();
-    $words_placeholder = array();
-    foreach($words_including_small as $key => $word){
-      if(strlen(trim($word))>3){
-        $words[$key] = $word;
-        $words_placeholder[] = "'%s'";
-      }
-    }
-    // Because I'm sending words as an array, I've also got to do vids in the same way
-    $vids_placeholder = array();
-    foreach($vids as $doesntmatter){
-      $vids_placeholder[] = "vid = %d";
-    }
-    if(count($words_placeholder) && count($vids)){
-      // To make the following SQL command easier to read, it has been spaced!
-      $results = db_query("
-          SELECT 
-            t.tid, t.vid 
-          FROM 
-            {term_lowername} l,
-            {term_data} t 
-          WHERE 
-            t.tid = l.tid AND 
-            lowername IN (".implode(",",$words_placeholder).") AND 
-            (".implode(" OR ",$vids_placeholder).") 
-          UNION 
-          SELECT 
-            t.tid, t.vid 
-          FROM 
-            {term_data} t, 
-            {term_synonym} s 
-          WHERE 
-            s.tid = t.tid AND 
-            LOWER(s.name) IN (".implode(",",$words_placeholder).") AND 
-            (".implode(" OR ",$vids_placeholder).")",
-        array_merge($words,$vids,$words,$vids));
-        
-      while($row=db_fetch_array($results)){
-        $terms[] = array('tid'=>$row['tid'], 'vid'=>$row['vid']);
-      }
-      $total_words = count($words);
-      $sql_array = array();
-      $sql_array_syn = array();
-      $words_array = array();
-      $words_array_syn = array();
-      foreach($words as $key => $word){
-        if(isset($words_including_small[$key+1])){
-          // Now lets search for "pairs" and search on "like".  If any hit, check back on the result against
-          // the original field
-          $sql_array[] = " lowername LIKE '%s%%%s%%' ";
-          $words_array[] = $word;
-          $words_array[] = $words_including_small[$key+1];
-          $sql_array_syn[] = " LOWER(s.name) LIKE '%s%%%s%%' ";
-          $words_array_syn[] = $word;
-          $words_array_syn[] = $words_including_small[$key+1];
-        }
-      }
-      if(count($sql_array)){
-        $results = db_query("
-            SELECT 
-              tid
-            FROM 
-              {term_lowername} l 
-            WHERE 
-              ".implode(" OR ",$sql_array)." 
-            UNION
-            SELECT 
-              tid 
-            FROM 
-              {term_synonym} s
-            WHERE 
-              ".implode(" OR ",$sql_array_syn),
-          array_merge($words_array, $words_array_syn));
-        
-        while($row=db_fetch_array($results)){
-          // Get the full term name, and its synonyms, and check back against the field
-          $results_2 = db_query("
-              SELECT 
-                tid, vid, LOWER(name) AS name
-              FROM 
-                {term_data}
-              WHERE 
-                tid = %d AND
-                (".implode(" OR ",$vids_placeholder).")
-              UNION
-              SELECT
-                s.tid, vid, LOWER(s.name) AS name
-              FROM 
-                {term_synonym} s,
-                {term_data} t
-              WHERE 
-                s.tid = %d AND
-                t.tid=s.tid AND 
-                (".implode(" OR ",$vids_placeholder).")",
-            array_merge(array($row['tid']),$vids,array($row['tid']),$vids));
-            
-          while($row_2=db_fetch_array($results_2)){
-            if(strpos(strtolower($field),$row_2['name'])!== FALSE){
-              $terms[] = array('tid'=>$row_2['tid'],'vid'=>$row_2['vid']);
-            }
-          }
-        }
-      }
-    }
-  }
-  return $terms;
-}
-
-/**
- * Function simply returns an array of fields to search when given a node
- */
-function _autotag_fields_to_search($node){
-  $fields = array();
-  $ignore_fields = array(
-    'op','attach-url','nid','vid','status','type','created','comment','changed','promote','sticky','revision_timestamp','log','format','uid','name','picture','data','path','last_comment_timestamp','last_comment_name','comment_count','files','iid','taxonomy','readmore','content','links','additionaltags'
-  );
-  foreach($node as $key=>$value){
-    if(!in_array($key, $ignore_fields)){
-      $fields[] = $key;
-    }
-  }
-  return $fields;
-}
-function _autotag_fields_to_search_post($post_form, $type){
-  $fields = array();
-  $ignore_fields = array(
-    'op','attach-url','nid','vid','status','type','created','comment','changed','promote','sticky','revision_timestamp','log','format','uid','name','picture','data','path','last_comment_timestamp','last_comment_name','comment_count','files','iid','taxonomy','readmore','content','links','additionaltags'
-  );
-  if(is_object($post_form) || is_array($post_form)){
-    foreach($post_form as $key=>$value){
-      if(!in_array($key, $ignore_fields)){
-        $fields[] = $key;
-      }
-    }
-    return $fields;
-  }
-  return array();
-}
-
-/**
- * Inserts ths stuff into the autotag table
- */
-function _autotag_update_table($nid, $values){
-  // Add the ignore terms to the database so that the next time the node is edited
-  // the terms are in the ignore list, and not the add list.
-  db_query("DELETE FROM {autotag} WHERE nid=%d",$nid);
-  $tids_nids = array();
-  $tids_nid_placeholder = array();
-  foreach($values as $value){
-    if($value!=''){
-      $tids_nid_placeholder[] = "(%d,%d)";
-      $tids_nids[] = $nid;
-      $tids_nids[] = $value;
-    }
-  }
-  if(count($tids_nid_placeholder)){
-    db_query("INSERT INTO {autotag} (nid, tid) VALUES ".implode(",",$tids_nid_placeholder), $tids_nids);
-  }
-}
-
-/**
- * Gets the terms that this node will ignore
- */
-function _autotag_get_ignore_terms($nid){
-  $results = db_query("SELECT a.tid FROM {autotag} a,{term_data} t WHERE nid = %d AND a.tid = t.tid ORDER BY vid,name", $nid);
-  $terms = array();
-  while($nid = db_fetch_array($results)){
-    $terms[] = taxonomy_get_term($nid['tid']);
-  }
-  return $terms;
+  module_load_include('form_alter.inc','autotag');
+  module_load_include('functions.inc','autotag');
+  _autotag_form_alter($form, $form_state, $form_id);
 }
