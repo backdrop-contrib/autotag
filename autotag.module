@@ -24,6 +24,18 @@ function autotag_node_operations(){
 }
 
 /**
+ * Implementation of hook_theme()
+ */
+function autotag_theme() {
+  return array(
+    'autotag_admin_settings' => array(
+      'arguments' => array('form' => NULL),
+      'file' => 'autotag.settings.inc',
+    )
+  );
+}
+
+/**
  * Callback for node_operation to re-autotag nodes.
  */
 function autotag_mass_update($nodes){
@@ -55,7 +67,7 @@ function autotag_mass_update($nodes){
 /**
  * Node Mass Update Batch operation
  */
-function _autotag_mass_update_batch_process($nodes, $updates, &$context) {
+function _autotag_mass_update_batch_process($nodes, &$context) {
   if (!isset($context['sandbox']['progress'])) {
     $context['sandbox']['progress'] = 0;
     $context['sandbox']['max'] = count($nodes);

@@ -33,17 +33,20 @@ function _autotag_form_alter(&$form, &$form_state, $form_id){
     }
     return;
   }
-  if(variable_get('autotag_without_user_input', 0)){
-    return;
-  }
-  // If we're here, then this is a node form
   // If no vocabs are relevant to this node, simply return
-  $hide_vids = _autotag_get_vids_for_type($form['type']['#value']);
-  if(!count($hide_vids)){return;}
-  
   // Also check for if we're being called by the node_import module, as if we
   // are, we need to return
-  if(strpos($_GET['q'], 'admin/content/node_import') !== FALSE){ return; }
+  // If we're editing a node of type "x" which has been set to never autotag, 
+  // then return
+  $hide_vids = _autotag_get_vids_for_type($form['type']['#value']);
+  if(
+      variable_get('autotag_without_user_input', 0) ||
+      !count($hide_vids) ||
+      strpos($_GET['q'], 'admin/content/node_import') !== FALSE ||
+      in_array($form['type']['#value'], variable_get('autotag_dont_autotag'))
+    ){
+    return;
+  }  
   
   // Autotag doesn't work with the following content types, return if this node
   // is one of these.

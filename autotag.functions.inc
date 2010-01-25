@@ -184,7 +184,8 @@ function _autotag_search_post($values){
  */
 function _autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
   // This is completely broken with some node types
-  if(in_array($node->type, variable_get('autotag_totally_borked', array()))){
+  $dont_autotag = variable_get('autotag_dont_autotag', array());
+  if(in_array($node->type, variable_get('autotag_totally_borked', array())) || (isset($dont_autotag[$node->type]) && $dont_autotag[$node->type])){
     return;
   }
   switch($op){
