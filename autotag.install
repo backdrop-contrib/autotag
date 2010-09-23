@@ -1,14 +1,38 @@
 <?php
+
 /**
- * Implementation of hook_install
+ * hook_install
  */
 function autotag_install(){
+  // We need to ensure the module is a little weightier than the taxonomy module
+  // in order to ensure this modules hook executes after taxonomy's.
+  $result[] = db_query("UPDATE {system} SET weight=10 WHERE name='autotag'");
   // Create tables.
   drupal_install_schema('autotag');
-  // Autotag needs to be heavier than fieldgroup and taxonomy (9 & 0)
-  $result[] = db_query("UPDATE {system} SET weight=10 WHERE name='autotag'");
-  autotag_update_6102();
-  
+}
+
+/**
+ * hook_schema
+ */
+function autotag_schema(){
+  return array(
+    'autotag' => array(
+      'fields' => array(
+        'nid' => array(
+          'type' => 'int',
+          'not null' => true
+        ),
+        'tid' => array(
+          'type' => 'int',
+          'not null' => true
+        )
+      ),
+      'primary key' => array(
+        'nid',
+        'tid'
+      )
+    )
+  );
 }
 
 function autotag_update_6101(){
@@ -62,22 +86,14 @@ function autotag_update_6107(){
 }
 
 /**
- * Implementation of hook_schema
+ * Clean up unwanted variables.
  */
-function autotag_schema(){
-  $tables['autotag'] = array(
-    'fields' => array(
-      'nid' => array('type' => 'int', 'not null' => true),
-      'tid' => array('type' => 'int', 'not null' => true)),
-    'primary key' => array('nid', 'tid'));
-  return $tables;
-}
-/**
- * Implementation of hook_uninstall
- */
-function autotag_uninstall(){
-  // Remove tables.
-  drupal_uninstall_schema('autotag');
-  variable_set('node_preview',variable_get('autotag_node_preview',1));
+function autotag_update_6201(){
+  variable_del('autotag_broken_node_types');
+  variable_del('autotag_disable_vids');
+  variable_del('autotag_dont_autotag');
   variable_del('autotag_node_preview');
+  variable_del('autotag_totally_borked');
+  variable_del('autotag_without_user_input');
+  return array('#finished' => TRUE);
 }

@@ -1,205 +1,207 @@
 <?php
-// $Id$
-// $HeadURL$
-
-/** 
- * @file autotag.module
- * 
- * Automatically tags nodes with terms depending on the content of textfields.
- * Textfields to ignore can be set on the modules settings page, along with the 
- * number of nodes to search on cron.  Once all nodes have been search by cron,
- * this module shouldn't do anything on a cron run.
- */
 
 /**
- * Implementation of hook_node_operations
+ * hook_form_alter
  */
-function autotag_node_operations(){
-  return array(
-    'autotag' => array(
-      'label' => t('Automatically tag'),
-      'callback' => 'autotag_mass_update'
-    )
-  );
-}
-
-/**
- * Implementation of hook_theme()
- */
-function autotag_theme() {
-  return array(
-    'autotag_admin_settings' => array(
-      'arguments' => array('form' => NULL),
-      'file' => 'autotag.settings.inc',
-    )
-  );
-}
-
-/**
- * Callback for node_operation to re-autotag nodes.
- */
-function autotag_mass_update($nodes){
-  // Following ripped off from nodes module.
-  // We use batch processing to prevent timeout when updating a large number
-  // of nodes.
-  if (count($nodes) > 10) {
-    $batch = array(
-      'operations' => array(
-        array('_autotag_mass_update_batch_process', array($nodes))
-      ),
-      'finished' => '_autotag_mass_update_batch_finished',
-      'title' => t('Processing'),
-      // We use a single multi-pass operation, so the default
-      // 'Remaining x of y operations' message will be confusing here.
-      'progress_message' => '',
-      'error_message' => t('The update has encountered an error.')
+function autotag_form_alter(&$form, &$form_state, $form_id){
+  if($form['#id'] == 'node-form' && isset($form['taxonomy']) && count(_autotag_get_vids_for_type($form['type']['#value']))){
+    // Always make the taxonomy section a fieldset, as it groups the button with
+    // the autocomplete section.
+    $form['taxonomy'] += array(
+      '#type' => 'fieldset',
+      '#title' => t('Vocabularies'),
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE,
+      '#prefix' => '<div id="taxonomy-fieldset">',
+      '#suffix' => '</div>'
     );
-    batch_set($batch);
-  }
-  else {
-    foreach($nodes as $nid){
-      _autotag_mass_update_helper($nid);
+    // Weight to the bottom
+    $form['taxonomy']['autotag'] = array(
+      '#prefix' => '<div id="taxonomy-autotag">',
+      '#suffix' => '</div>',
+      '#weight' => 1000
+    );
+    // Box for entering a message when autotag button is pressed
+    // Weight to the top.
+    $form['taxonomy']['autotag-message'] = array(
+      '#weight' => -1000,
+      '#value' => '<div id="autotag-message" class="messages status"></div>'
+    );
+    // The Autotag button
+    $form['taxonomy']['autotag']['taxonomyautotagbutton'] = array(
+      '#tree' => FALSE,
+      '#type' => 'button',
+      '#value' => t('Autotag'),
+      '#ahah' => array(
+        'path' => 'autotag/' . $form['type']['#value'] . '/' . $form['nid']['#value'],
+        'wrapper' => 'node-form',
+        'progress' => array(
+          'type' => 'bar',
+          'message' => t('Autotagging...')
+        )
+      )
+    );
+    // Get the default state for the checkbox
+    $checkboxes = variable_get('autotag_save_checkbox', array());
+    if($form_state['submitted'] && $form_state['clicked_button']['#submit'][0] == 'node_form_build_preview'){
+      $checkbox_default_value = $form_state['values']['taxonomyautotagcheckbox'];
+    } else {
+      $checkbox_default_value = isset($checkboxes[$form['type']['#value']]) ? $checkboxes[$form['type']['#value']] : 0;
     }
-    drupal_set_message(t('The update has been performed.'));
+    $form['taxonomy']['autotag']['taxonomyautotagcheckbox'] = array(
+      '#tree' => FALSE,
+      '#type' => 'checkbox',
+      '#title' => t('Autotag on save'),
+      '#description' => t('If checked, after clicking "Save", the node will be associated with all relevant terms - you will not be given the option to review these.'),
+      '#default_value' => $checkbox_default_value 
+    );
+    // Add the CSS file to style the checkbox and button
+    drupal_add_css(drupal_get_path('module', 'autotag') . '/autotag.css');
+    // Add the JS that will do the work for the Autotag button.
+    drupal_add_js(drupal_get_path('module', 'autotag') . '/autotag.js');
+    // Additional autotag stuff needs executing.
+    drupal_add_js(array(
+      'ahah' => array(
+        'edit-taxonomyautotagbutton' => array(
+          'submitextra' => 'autotag_submitextra'
+        )
+      )
+    ), 'setting');
   }
 }
 
 /**
- * Node Mass Update Batch operation
- */
-function _autotag_mass_update_batch_process($nodes, &$context) {
-  if (!isset($context['sandbox']['progress'])) {
-    $context['sandbox']['progress'] = 0;
-    $context['sandbox']['max'] = count($nodes);
-    $context['sandbox']['nodes'] = $nodes;
-  }
-
-  // Process nodes by groups of 5.
-  $count = min(5, count($context['sandbox']['nodes']));
-  for ($i = 1; $i <= $count; $i++) {
-    // For each nid, load the node, reset the values, and save it.
-    $nid = array_shift($context['sandbox']['nodes']);
-    _autotag_mass_update_helper($nid);
-    
-    // Update our progress information.
-    $context['sandbox']['progress']++;
-  }
-
-  // Inform the batch engine that we are not finished,
-  // and provide an estimation of the completion level we reached.
-  if ($context['sandbox']['progress'] != $context['sandbox']['max']) {
-    $context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
-  }
-}
-
-/**
- * Node Mass Update Batch 'finished' callback.
- */
-function _autotag_mass_update_batch_finished($success, $results, $operations) {
-  if ($success) {
-    drupal_set_message(t('The update has been performed.'));
-  }
-  else {
-    drupal_set_message(t('An error occurred and processing did not complete.'), 'error');
-  }
-}
-
-/**
- * Helper function for above.
- */
-function _autotag_mass_update_helper($nid){
-  $node = node_load(array('nid' => $nid));
-  node_save($node);
-}
-
-/**
- * Implementation of hook_nodeapi
+ * hook_nodeapi
  */
 function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
-  module_load_include('functions.inc','autotag');
-  _autotag_nodeapi($node, $op, $a3, $a4);
+  //drupal_set_message($op . ': ' . db_result(db_query('SELECT COUNT(*) FROM term_node WHERE nid = 12')));
+  switch($op){
+    case 'presave':
+      // If the autotag checkbox is present and checked, we'll search the node
+      // for tags, and add them to the node before saving.
+      if(isset($node->taxonomyautotagcheckbox) && $node->taxonomyautotagcheckbox){
+        module_load_include('ahah.inc', 'autotag');
+        $tids = autotag_search_form_array($_POST, $node->type);
+        // Remove the tids that we don't want adding - we can only do this if we have
+        // an nid
+        if($node->nid){
+          $result = db_query('SELECT a.tid, vid FROM {autotag} a, {term_data} t WHERE nid = %d AND a.tid = t.tid', $node->nid);
+          while($row = db_fetch_array($result)){
+            $key = array_search($row, $tids);
+            if($key !== FALSE){
+              unset($tids[$key]);
+            }
+          }
+        }
+        foreach($tids as $tid){
+          if(is_array($node->taxonomy[$tid['vid']])){
+            $node->taxonomy[$tid['vid']][$tid['tid']] = $tid['tid'];
+          }else{
+            $node->taxonomy[$tid['vid']] = array(
+              $tid['tid'] => $tid['tid']
+            );
+          }
+        }
+      }
+      break;
+    case 'update':
+    case 'insert':
+      // Here we can add the relevant tids to the autotag table.
+      if(isset($_SESSION['autotag_tids'][$node->form_build_id])){
+        // Lets get the ones that were tagged to the node from the term_node table
+        $result = db_query('SELECT n.tid, t.vid FROM {term_node} n, {term_data} t WHERE n.tid = t.tid AND nid = %d', $node->nid);
+        while($row = db_fetch_array($result)){
+          $key = array_search($row, $_SESSION['autotag_tids'][$node->form_build_id]);
+          if($key !== FALSE){
+            unset($_SESSION['autotag_tids'][$node->form_build_id][$key]);
+          }
+        }
+        // Clear the current ignore tids
+        db_query('DELETE FROM {autotag} WHERE nid = %d', $node->nid);
+        if(count($_SESSION['autotag_tids'][$node->form_build_id])){
+          $tids_string = array();
+          foreach($_SESSION['autotag_tids'][$node->form_build_id] as $tid){
+            $tids_string[] = $node->nid . ', ' . $tid['tid'];
+          }
+          // Add the new ignore tids
+          db_query('INSERT INTO {autotag} (nid, tid) VALUES ('.implode('),(', $tids_string).')');
+        }
+      } else {
+        // We've probably saved without pressing the autotag button.  We need to
+        // check that the autotag checkbox is checked, and if so, delete the
+        // bits from the autotag table that may have been tagged..
+        if(isset($node->taxonomyautotagcheckbox) && $node->taxonomyautotagcheckbox){
+          db_query('DELETE FROM {autotag} WHERE tid IN (SELECT tid FROM {term_node} WHERE {autotag}.nid = nid AND {autotag}.tid = tid) AND nid IN (SELECT nid FROM {term_node} WHERE {autotag}.nid = nid AND {autotag}.tid = tid)');
+        }
+      }
+      break;        
+  }
 }
 
 /**
- * Implementation of hook_menu
- * 
- * Needed only for the module's settings page, and the autocomplete function
+ * Get the vids that are associated with a content type and that are set as
+ * multiple select, and not required.
+ */
+function _autotag_get_vids_for_type($type){
+  static $static_vids;
+  if(isset($static_vids[$type])){return $static_vids[$type];}
+  $vocabularies = taxonomy_get_vocabularies();
+  $vids = array();
+  foreach($vocabularies as $vocabulary){
+    if(in_array($type, $vocabulary->nodes) && $vocabulary->required == 0 && $vocabulary->multiple == 1){
+      $vids[] = $vocabulary->vid;
+    }
+  }
+  $static_vids[$type] = $vids;
+  return $vids;
+}
+
+/**
+ * hook_menu
  */
 function autotag_menu(){
   return array(
-    'autotag/autocomplete' => array(
-      'title' => 'Autocomplete autotag thingumy',
-      'page callback' => 'autotag_autocomplete',
-      'access arguments' => array('access content'),// Hmmm, not ideal!
-      'type' => MENU_CALLBACK,
-      'file' => 'autotag.autocomplete.inc'
+    'autotag/%' => array(
+      'title' => 'Autotag callback',
+      'page callback' => 'autotag_callback',
+      'file' => 'autotag.ahah.inc',
+      'access arguments' => array(
+        1
+      ),
+      'access callback' => 'autotag_callback_access',
+      'page arguments' => array(
+        1
+      ),
+      'type' => MENU_CALLBACK
     ),
     'admin/settings/autotag' => array(
       'title' => 'Autotag settings',
       'description' => 'Change the default autotag settings.',
       'page callback' => 'drupal_get_form',
-      'page arguments' => array('autotag_admin_settings'),
-      'access arguments' => array('administer site configuration'),
+      'page arguments' => array(
+        'autotag_admin_settings'
+      ),
+      'access arguments' => array(
+        'administer site configuration'
+      ),
       'file' => 'autotag.settings.inc'
     )
   );
 }
 
 /**
- * Simply save what was entered in the checkbox
+ * Access callback
  */
-function autotag_submit_vocabulary_form($form, $form_values){
-  // Merge the array with what is already there.
-  $disable_vids = variable_get('autotag_disable_vids', array());
-  $disable_vids[$form_values['vid']] = $form_values['values']['disableautotag'];
-  variable_set('autotag_disable_vids', $disable_vids);
-}
-
-/**
- * Receive the form after the first page, nothing is done after the second.
- */
-function autotag_form_submit($form, &$form_state){
-  if(isset($form_state['storage']['formbuttons'])){
-    // After first page we store the form so that it can be restored on the second
-    // page
-    $form_state['storage']['formsubmitted'] = $form;
-  } else {
-    if(isset($form_state['clicked_button']['#post']['files'])){
-      foreach($form_state['clicked_button']['#post']['files'] as $key => $value){
-        // If we have a node, then the files may already be associated.
-        $fids_to_ignore = array();
-        if(isset($form['#node']->nid)){
-          // Lets get a list of the FIDs that are already in the upload table
-          $results = db_query("SELECT DISTINCT fid FROM upload WHERE nid = %d", $form['#node']->nid);
-          while($row = db_fetch_array($results)){
-            $fids_to_ignore[$row['fid']] = $row['fid'];
-          }
-        }
-        if(!isset($fids_to_ignore[$key])){
-          $form_state['values']['files'][$key] = db_fetch_array(db_query("SELECT * FROM files WHERE fid = %d", $key));
-          $form_state['values']['files'][$key]['new'] = 1;
-          $form_state['values']['files'][$key]['list'] = 1;
-        }
-      }
-    }
-    
-    // Restore the hidden form fields from the old form for taxonomy
-    module_load_include('functions.inc','autotag');
-    $hide_vids = _autotag_get_vids_for_type($form['type']['#value']);
-    foreach($form['taxonomy'] as $key=>$value){
-      if(in_array($key,$hide_vids)){
-        $form_state['values']['taxonomy'][$key] = $form_state['storage']['oldtaxonomy'][$key]['#default_value'];
-      }
-    }
-    // Unset storage to ensure the form isn't presented to the user again.
-    unset($form_state['storage']['oldtaxonomy']);
+function autotag_callback_access($content_type, $nid = FALSE){
+  // If we've got a nid, then check this user can edit that node, else we assume
+  // that we're creating a new node, so check the user can create a node of this
+  // type
+  if($nid){
+    $node = node_load(array(
+      'nid' => $nid
+    ));
+    return node_access('update', $node);
+  }else{
+    return node_access('create', $content_type);
   }
-}
-/**
- * Implementation of hook_form_alter
- */
-function autotag_form_alter(&$form, &$form_state, $form_id){
-  module_load_include('form_alter.inc','autotag');
-  module_load_include('functions.inc','autotag');
-  _autotag_form_alter($form, $form_state, $form_id);
 }
