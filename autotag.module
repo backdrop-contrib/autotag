@@ -4,7 +4,9 @@
  * hook_form_alter
  */
 function autotag_form_alter(&$form, &$form_state, $form_id){
-  if($form['#id'] == 'node-form' && isset($form['taxonomy']) && count(_autotag_get_vids_for_type($form['type']['#value']))){
+  if(in_array($form['type']['#value'], variable_get('autotag_broken_node_types', array()))){return;}
+  $autotag_vids = _autotag_get_vids_for_type($form['type']['#value']);
+  if($form['#id'] == 'node-form' && isset($form['taxonomy']) && count($autotag_vids)){
     // Always make the taxonomy section a fieldset, as it groups the button with
     // the autocomplete section.
     $form['taxonomy'] += array(
@@ -41,11 +43,18 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
         )
       )
     );
+    // Message to define the dagger
+    $form['taxonomy']['autotag']['dagger'] = array(
+      '#value' => '<p style="margin:0"><small>&dagger; ' . t('Only the marked vocabularies will use Autotag') . '</small>' . theme('advanced_help_topic', 'autotag', 'autotag') . '</p>'
+    );
+    foreach($autotag_vids as $vid){
+      $form['taxonomy'][$vid]['#title'] .= ' &dagger;';
+    }
     // Get the default state for the checkbox
     $checkboxes = variable_get('autotag_save_checkbox', array());
     if($form_state['submitted'] && $form_state['clicked_button']['#submit'][0] == 'node_form_build_preview'){
       $checkbox_default_value = $form_state['values']['taxonomyautotagcheckbox'];
-    } else {
+    }else{
       $checkbox_default_value = isset($checkboxes[$form['type']['#value']]) ? $checkboxes[$form['type']['#value']] : 0;
     }
     $form['taxonomy']['autotag']['taxonomyautotagcheckbox'] = array(
@@ -53,7 +62,7 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
       '#type' => 'checkbox',
       '#title' => t('Autotag on save'),
       '#description' => t('If checked, after clicking "Save", the node will be associated with all relevant terms - you will not be given the option to review these.'),
-      '#default_value' => $checkbox_default_value 
+      '#default_value' => $checkbox_default_value
     );
     // Add the CSS file to style the checkbox and button
     drupal_add_css(drupal_get_path('module', 'autotag') . '/autotag.css');
@@ -74,14 +83,21 @@ function autotag_form_alter(&$form, &$form_state, $form_id){
  * hook_nodeapi
  */
 function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
-  //drupal_set_message($op . ': ' . db_result(db_query('SELECT COUNT(*) FROM term_node WHERE nid = 12')));
   switch($op){
     case 'presave':
       // If the autotag checkbox is present and checked, we'll search the node
       // for tags, and add them to the node before saving.
-      if(isset($node->taxonomyautotagcheckbox) && $node->taxonomyautotagcheckbox){
+      // Or, the node type allows autotagging (this may fix an issue with 
+      // biblio).
+      $checkbox = variable_get('autotag_save_checkbox', array());
+      if((isset($node->taxonomyautotagcheckbox) && $node->taxonomyautotagcheckbox) || ($checkbox[$node->type] && !count($_POST))){
         module_load_include('ahah.inc', 'autotag');
-        $tids = autotag_search_form_array($_POST, $node->type);
+        if(count($_POST)){
+          $data = $_POST;
+        }else{
+          $data = $node;
+        }
+        $tids = autotag_search_form_array($data, $node->type);
         // Remove the tids that we don't want adding - we can only do this if we have
         // an nid
         if($node->nid){
@@ -124,9 +140,9 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
             $tids_string[] = $node->nid . ', ' . $tid['tid'];
           }
           // Add the new ignore tids
-          db_query('INSERT INTO {autotag} (nid, tid) VALUES ('.implode('),(', $tids_string).')');
+          db_query('INSERT INTO {autotag} (nid, tid) VALUES (' . implode('),(', $tids_string) . ')');
         }
-      } else {
+      }else{
         // We've probably saved without pressing the autotag button.  We need to
         // check that the autotag checkbox is checked, and if so, delete the
         // bits from the autotag table that may have been tagged..
@@ -134,7 +150,7 @@ function autotag_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL){
           db_query('DELETE FROM {autotag} WHERE tid IN (SELECT tid FROM {term_node} WHERE {autotag}.nid = nid AND {autotag}.tid = tid) AND nid IN (SELECT nid FROM {term_node} WHERE {autotag}.nid = nid AND {autotag}.tid = tid)');
         }
       }
-      break;        
+      break;
   }
 }
 
