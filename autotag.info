@@ -1,7 +1,6 @@
-name = "Taxonomy Automatic Tagger (Autotag)"
-description = "Scans content for relevant tags, and applies them"
-package = "EDIT"
-dependencies[] = taxonomy
-dependencies[] = lowername
-dependencies[] = ahah_action
-core = 6.x
+name = Taxonomy term searcher
+description = Implements the Tags API to help link entities to terms already present on a site.
+core = 7.x
+files[] = autotag.module
+package = Tags
+php = 5.2
