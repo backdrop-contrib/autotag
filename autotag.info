@@ -4,3 +4,4 @@ core = 7.x
 files[] = autotag.module
 package = Tags
 php = 5.2
+dependencies[] = tag
