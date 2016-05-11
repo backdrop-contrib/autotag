@@ -18,7 +18,7 @@ function autotag_tag_suggestion_info(){
       'options' => array(
         'callback' => 'autotag_tag_options',
         'keys' => array(
-          'autotag_vids',
+          'autotag_vocabularies',
           'tag_only_with_tips'
         )
       )
@@ -30,15 +30,15 @@ function autotag_tag_suggestion_info(){
  * Callback as defined above in hook_tag_suggestion_info
  */
 function autotag_tag_suggestions($text, $options){
-  // Simply passed the text.  We now need to get the vids that we're interested
+  // Simply passed the text.  We now need to get the vocabularies that we're interested
   // in (specific for this module).
   $tags = array();
-  foreach($options['autotag_vids'] as $vid){
-    $term_count = db_query("SELECT COUNT(*) FROM {taxonomy_term_data} WHERE vid = ?", array(
-      $vid
+  foreach($options['autotag_vocabularies'] as $vocabulary){
+    $term_count = db_query("SELECT COUNT(*) FROM {taxonomy_term_data} WHERE vocabulary = ?", array(
+      $vocabulary
     ))->fetchField();
     if($term_count > 0 && strlen(trim($text))){
-      $tags = array_merge($tags, autotag_search_text($text, $vid, $options['tag_only_with_tips']));
+      $tags = array_merge($tags, autotag_search_text($text, $vocabulary, $options['tag_only_with_tips']));
     }
   }
   return $tags;
@@ -47,7 +47,7 @@ function autotag_tag_suggestions($text, $options){
 /**
  * Compare functions
  */
-function autotag_search_text($text, $vid, $tag_only_leaves){
+function autotag_search_text($text, $vocabulary, $tag_only_leaves){
   $tags_to_return = array();
   /**
    * Discovered that the following only seems to work in PHP 5.2, FARP!
@@ -112,7 +112,7 @@ function autotag_search_text($text, $vid, $tag_only_leaves){
   }
   // Select the direct single word matches.
   $select = db_select('taxonomy_term_data', 't');
-  $select->condition('vid', $vid);
+  $select->condition('vocabulary', $vocabulary);
   $select->join($temporary_table_name, 'a', 'a.words LIKE t.name');
   $select->addField('t', 'tid');
   $select->addField('t', 'name');
@@ -128,7 +128,7 @@ function autotag_search_text($text, $vid, $tag_only_leaves){
   }
   // Next we need to get the multiple word terms
   $select = db_select('taxonomy_term_data', 't');
-  $select->condition('vid', $vid);
+  $select->condition('vocabulary', $vocabulary);
   $select->condition('name', '% %', 'LIKE');
   $select->addField('t', 'tid');
   $select->addField('t', 'name');
@@ -150,8 +150,8 @@ function autotag_search_text($text, $vid, $tag_only_leaves){
 function autotag_tag_options($node_type, $settings){
   $vocabularies = taxonomy_vocabulary_load_multiple(FALSE);
   $options = array();
-  foreach($vocabularies as $vid => $vocabulary){
-    $options[$vid] = $vocabulary->name;
+  foreach($vocabularies as $machine_name => $vocabulary){
+    $options[$machine_name] = $vocabulary->name;
   }
   return array(
     'tag_only_with_tips' => array(
@@ -160,26 +160,13 @@ function autotag_tag_options($node_type, $settings){
       '#default_value' => isset($settings['autotag']['tag_only_with_tips']) ? $settings['autotag']['tag_only_with_tips'] : 0,
       '#description' => 'Check this box if you would only like "leaf" terms to be used for tagging, else ALL terms will be used.'
     ),
-    'autotag_vids' => array(
+    'autotag_vocabularies' => array(
       '#title' => t('Vocabularies'),
       '#type' => 'select',
       '#options' => $options,
       '#multiple' => TRUE,
       '#description' => t('Select the vocabularies you would like to search.'),
-      '#default_value' => isset($settings['autotag']['autotag_vids']) ? $settings['autotag']['autotag_vids'] : array()
-    )
-  );
-}
-
-/**
- * Implements hook_update_dependencies()
- */
-function autotag_update_dependencies(){
-  return array(
-    'autotag' => array(
-      7001 => array(
-        'tagtag' => 7001
-      )
+      '#default_value' => isset($settings['autotag']['autotag_vocabularies']) ? $settings['autotag']['autotag_vocabularies'] : array()
     )
   );
 }
