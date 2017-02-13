@@ -1,4 +1,4 @@
-name =  Autotag: Taxonomy term searcher
+name =  Autotag: Taxonomy Term Searcher
 description = Implements the Tags API to help link entities to terms already present on a site.
 backdrop = 1.x
 package = Tags
